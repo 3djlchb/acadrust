@@ -297,6 +297,8 @@ struct Pass2Chunk {
     pending: PendingPolylines,
     pending_attributes: HashMap<u64, Vec<AttributeEntity>>,
     failures: Vec<RecordFailure>,
+    /// Class objects that failed to decode but were kept verbatim.
+    kept_undecoded: Vec<RecordFailure>,
     /// (handle, type code, merged bytes, handle bits) — only with ACADRUST_RAW_ALL.
     raw_records: Vec<(u64, i16, Vec<u8>, i64)>,
 }
@@ -328,6 +330,7 @@ impl Pass2Chunk {
             pending: PendingPolylines::default(),
             pending_attributes: HashMap::new(),
             failures: Vec::new(),
+            kept_undecoded: Vec::new(),
             raw_records: Vec::new(),
         }
     }
@@ -1984,6 +1987,35 @@ impl DwgDocumentBuilder {
                                 chunk.output.context_scales.insert(object_handle, scale);
                             }
                             chunk.output.objects.insert(object_handle, object);
+                        } else if raw_type_code >= 500
+                            && !entity_class_numbers.contains(&raw_type_code)
+                            && !is_table_type(type_code)
+                        {
+                            // A class object this reader cannot decode (a layout it
+                            // does not know yet) is kept verbatim, as objects of
+                            // unknown classes are: a same-version save writes its
+                            // bytes back, so nothing is lost.
+                            if let Some(kept) = self.keep_undecoded_object(
+                                handle,
+                                offset,
+                                raw_type_code,
+                                type_code,
+                                &class_names,
+                                source_version,
+                            ) {
+                                chunk.output.objects.insert(Handle::from(handle), kept);
+                                chunk.kept_undecoded.push(RecordFailure {
+                                    code: "record-kept-undecoded",
+                                    handle,
+                                    offset,
+                                    type_code,
+                                    recoverable: false,
+                                    message: format!(
+                                        "Record at handle {handle:#X}, type_code={type_code} kept undecoded: {message}"
+                                    ),
+                                });
+                                continue;
+                            }
                         }
                         chunk.failures.push(RecordFailure {
                             code: if recoverable {
@@ -2108,6 +2140,18 @@ impl DwgDocumentBuilder {
                         .entry(owner)
                         .or_default()
                         .append(&mut attributes);
+                }
+                for kept in chunk.kept_undecoded {
+                    self.notifications
+                        .notify(NotificationType::Warning, kept.message.clone());
+                    let mut diagnostic =
+                        ReadDiagnostic::new(kept.code, ReadStage::RecordStream, kept.message);
+                    diagnostic.source_offset = Some(kept.offset as u64);
+                    diagnostic.source_offset_basis = Some("object-section-byte".to_string());
+                    diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                    diagnostic.record_handle = Some(kept.handle);
+                    diagnostic.record_type = Some(kept.type_code.to_string());
+                    push_read_diagnostic(&mut diagnostics, diagnostic);
                 }
                 for failure in chunk.failures {
                     if !failure.recoverable {
@@ -7544,6 +7588,38 @@ impl DwgDocumentBuilder {
 
     /// Name an unsupported object by its CLASSES-section dxfname when the
     /// drawing's class map knows it, falling back to the positional code.
+    /// Re-reads a class object whose decoding failed and keeps it verbatim
+    /// as [`ObjectType::Unknown`](crate::objects::ObjectType::Unknown), with
+    /// its owner from the common data; `None` if even that does not read.
+    fn keep_undecoded_object(
+        &self,
+        handle: u64,
+        offset: usize,
+        raw_type_code: i16,
+        type_code: i16,
+        class_names: &ClassNames,
+        version: crate::types::DxfVersion,
+    ) -> Option<crate::objects::ObjectType> {
+        let (_, mut reader) = self.obj_reader.read_record_at(offset).ok()?;
+        let common = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.obj_reader
+                .read_common_non_entity_data(&mut reader, type_code)
+        }))
+        .ok()?;
+        if reader.check_error().is_err() || common.common.handle != handle {
+            return None;
+        }
+        Some(crate::objects::ObjectType::Unknown {
+            type_name: Self::unknown_object_type_name(class_names, raw_type_code),
+            handle: Handle::from(handle),
+            owner: Handle::from(common.owner_handle),
+            raw_dxf_codes: None,
+            raw_dwg_data: Some(reader.raw_merged_data()),
+            raw_dwg_handle_bits: reader.get_handle_bits(),
+            raw_dwg_version: Some(version),
+        })
+    }
+
     fn unknown_object_type_name(class_names: &ClassNames, raw_type_code: i16) -> String {
         class_names
             .dxf

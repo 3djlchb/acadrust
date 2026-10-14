@@ -250,20 +250,38 @@ fn broken_common_metadata_and_wrong_handles_still_fail_strict_reads() {
 
 #[test]
 fn other_known_object_decode_failures_still_fail_strict_reads() {
-    for (name, type_code) in [
-        ("CONTEXTDATAMANAGER", 540),
-        (
-            "LAYER",
-            acadrust::io::dwg::dwg_stream_readers::object_reader::common::OBJ_LAYER,
-        ),
-    ] {
-        let (source, ..) = auxiliary_fixture(DxfVersion::AC1032, name, type_code, false, false);
-        let bytes = DwgWriter::write_to_vec(&source).unwrap();
-        assert!(
-            DwgReader::from_stream(Cursor::new(bytes)).read().is_err(),
-            "{name}"
-        );
-    }
+    // A table record that fails to decode still fails a strict read.
+    let (source, ..) = auxiliary_fixture(
+        DxfVersion::AC1032,
+        "LAYER",
+        acadrust::io::dwg::dwg_stream_readers::object_reader::common::OBJ_LAYER,
+        false,
+        false,
+    );
+    let bytes = DwgWriter::write_to_vec(&source).unwrap();
+    assert!(DwgReader::from_stream(Cursor::new(bytes)).read().is_err());
+}
+
+#[test]
+fn other_class_objects_that_fail_to_decode_are_kept_verbatim() {
+    // A class object outside the auxiliary list, with sound framing and
+    // identity, is kept undecoded with its raw bytes: the read succeeds.
+    let (source, healthy, kept, ..) =
+        auxiliary_fixture(DxfVersion::AC1032, "CONTEXTDATAMANAGER", 540, false, false);
+    let bytes = DwgWriter::write_to_vec(&source).unwrap();
+    let read = DwgReader::from_stream(Cursor::new(bytes))
+        .read_with_stats()
+        .unwrap();
+    assert!(read.document.get_entity(healthy).is_some());
+    assert!(matches!(
+        read.document.objects.get(&kept),
+        Some(ObjectType::Unknown { raw_dwg_data: Some(_), .. })
+    ));
+    assert!(read
+        .stats
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "record-kept-undecoded"));
 }
 
 #[test]
