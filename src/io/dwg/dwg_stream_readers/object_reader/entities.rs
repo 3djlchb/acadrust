@@ -5105,9 +5105,30 @@ pub struct SurfaceEntityData {
 /// This reads both `DECODE_3DSOLID` (acis data) and the wireframe +
 /// `acis_empty_bit` + R2007+ trailing fields from `COMMON_3DSOLID`.
 /// The caller must still read the 3DSOLID-specific history_id handle.
+/// Which extra modeler block an ACIS record may carry after its body.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExtraModeler {
+    /// None: the next field follows the body.
+    No,
+    /// Version 2 (binary, header-checked) or version 1 (encrypted SAT).
+    Any,
+    /// Only version 2, taken when an ACIS/ASM binary header follows. Inline
+    /// surfaces may carry one (an R2004 lofted surface does); the
+    /// unvalidated version-1 probe would read their isoline counts instead.
+    SabOnly,
+}
+
 pub(super) fn read_extra_acis_data(
     reader: &mut DwgMergedReader,
     inline_end: Option<i64>,
+) -> Option<crate::entities::solid3d::AcisData> {
+    read_extra_acis_data_as(reader, inline_end, ExtraModeler::Any)
+}
+
+fn read_extra_acis_data_as(
+    reader: &mut DwgMergedReader,
+    inline_end: Option<i64>,
+    accept: ExtraModeler,
 ) -> Option<crate::entities::solid3d::AcisData> {
     let prefix_start = reader.position_in_bits();
     let _unknown = reader.read_bit();
@@ -5136,7 +5157,7 @@ pub(super) fn read_extra_acis_data(
         return None;
     }
 
-    if extra_version == 1 {
+    if extra_version == 1 && accept == ExtraModeler::Any {
         let mut encrypted = Vec::new();
         loop {
             let block_size = reader.read_bit_long();
@@ -5186,7 +5207,7 @@ pub fn read_acis_entity(
         version,
         dxf_version,
         has_ds_data,
-        false,
+        ExtraModeler::No,
         false,
         None,
     )
@@ -5200,7 +5221,7 @@ pub(super) fn read_history_acis_entity(
     version: DwgVersion,
     dxf_version: DxfVersion,
 ) -> AcisEntityData {
-    read_acis_entity_impl(reader, version, dxf_version, false, false, true, None)
+    read_acis_entity_impl(reader, version, dxf_version, false, ExtraModeler::No, true, None)
         .expect("history ACIS decoding retains unrecognized modeler payloads")
 }
 
@@ -5217,7 +5238,15 @@ pub(crate) fn read_inline_acis_entity(
     if end > reader.main_mut().data_len() as i64 * 8 {
         return None;
     }
-    let data = read_acis_entity_impl(reader, version, dxf_version, false, true, true, Some(end))?;
+    let data = read_acis_entity_impl(
+        reader,
+        version,
+        dxf_version,
+        false,
+        ExtraModeler::Any,
+        true,
+        Some(end),
+    )?;
     let remaining = end - reader.position_in_bits();
     // Byte-sized enclosing records may carry up to seven zero padding bits.
     // Never normalize an unrecognized modeler tail into a partial REGION.
@@ -5232,7 +5261,7 @@ fn read_acis_entity_impl(
     version: DwgVersion,
     dxf_version: DxfVersion,
     has_ds_data: bool,
-    allow_extra: bool,
+    extra: ExtraModeler,
     inline_layout: bool,
     inline_end: Option<i64>,
 ) -> Option<AcisEntityData> {
@@ -5455,8 +5484,8 @@ fn read_acis_entity_impl(
     if inline_end.is_some() || wireframe_present || !version.r2013_plus(dxf_version) {
         acis_empty_bit = reader.read_bit();
     }
-    let extra_acis_data = if allow_extra && !acis_empty_bit {
-        read_extra_acis_data(reader, inline_end)
+    let extra_acis_data = if extra != ExtraModeler::No && !acis_empty_bit {
+        read_extra_acis_data_as(reader, inline_end, extra)
     } else {
         None
     };
@@ -5617,15 +5646,17 @@ pub fn read_surface(
     has_ds_data: bool,
     kind: SurfaceKind,
 ) -> SurfaceEntityData {
-    // The optional extra modeler block belongs to AcDs-backed surfaces. On
-    // inline ACIS surfaces the next fields are the surface isoline counts;
-    // probing them as an extra ACIS payload shifts the record by one bit.
+    // On inline ACIS surfaces the next fields are usually the isoline
+    // counts, and probing them as an encrypted (version 1) extra modeler
+    // block shifts the record by one bit. But an inline surface may carry a
+    // binary (version 2) extra block (an R2004 lofted surface does), so only
+    // that self-validating probe is allowed.
     let acis = read_acis_entity_impl(
         reader,
         version,
         dxf_version,
         has_ds_data,
-        false,
+        ExtraModeler::SabOnly,
         false,
         None,
     )
