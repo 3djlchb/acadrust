@@ -1336,8 +1336,10 @@ impl<R: Read + Seek> DwgReader<R> {
                         decoded_source_records = build_outcome.decoded_records;
                         skipped_source_records = build_outcome.skipped_records;
                         if !failsafe && skipped_source_records != 0 {
+                            // Name a record that was skipped, not one preserved or kept undecoded.
                             return Err(DxfError::Parse(build_outcome.diagnostics.iter()
-                                .find(|diagnostic| diagnostic.code != "auxiliary-object-preserved")
+                                .find(|diagnostic| diagnostic.code != "auxiliary-object-preserved"
+                                    && diagnostic.code != "record-kept-undecoded")
                                 .map(|diagnostic| diagnostic.message.clone())
                                 .unwrap_or_else(|| "Invalid DWG object records".to_string())));
                         }
