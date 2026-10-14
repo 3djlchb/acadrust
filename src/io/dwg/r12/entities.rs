@@ -466,13 +466,14 @@ fn encode_record(
             writer.byte(color as u8);
         }
         if flag & 2 != 0 {
-            writer.byte(
-                (if ltype.eq_ignore_ascii_case("BYBLOCK") {
-                    -2
-                } else {
-                    lookup(&tables.linetypes, ltype, -1)?
-                }) as i8 as u8,
-            );
+            writer.short(if ltype.eq_ignore_ascii_case("BYBLOCK") {
+                LINETYPE_BYBLOCK
+            } else {
+                match lookup(&tables.linetypes, ltype, -1)? {
+                    -1 => LINETYPE_BYLAYER,
+                    index => index,
+                }
+            });
         }
         if flag & 4 != 0 {
             writer.double(elevation);
@@ -802,13 +803,16 @@ fn decode_record(bytes: &[u8], t: &EntityTables, code_page: &str) -> Result<Enti
     if flag & 1 != 0 {
         out.put(62, r.byte()? as i8 as i16);
     }
+    // R11/R12 store an entity's linetype as a 16-bit table index, with
+    // 32767 for BYLAYER and 32766 for BYBLOCK; reading one byte shifted
+    // every later field (LibreDWG's R11 spec; AutoCAD's ACEB10.dwg).
     if flag & 2 != 0 {
-        let index = r.byte()? as i8 as i16;
+        let index = r.short()?;
         out.put(
             6,
             match index {
-                -1 => "BYLAYER",
-                -2 => "BYBLOCK",
+                -1 | LINETYPE_BYLAYER => "BYLAYER",
+                -2 | LINETYPE_BYBLOCK => "BYBLOCK",
                 _ => table_name(&t.linetypes, index)?,
             },
         );
@@ -842,6 +846,11 @@ fn decode_record(bytes: &[u8], t: &EntityTables, code_page: &str) -> Result<Enti
     decode_geometry(&mut r, &mut out, t, options, flag, elevation)?;
     Ok(out)
 }
+
+/// The R11/R12 linetype index meaning BYLAYER.
+const LINETYPE_BYLAYER: i16 = 32767;
+/// The R11/R12 linetype index meaning BYBLOCK.
+const LINETYPE_BYBLOCK: i16 = 32766;
 
 fn decode_geometry(
     r: &mut Reader<'_>,
