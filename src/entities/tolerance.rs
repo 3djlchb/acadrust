@@ -359,9 +359,17 @@ impl Entity for Tolerance {
     }
 
     fn bounding_box(&self) -> BoundingBox3D {
-        // Approximate bounding box - would need font metrics for accuracy
-        let half_width = self.text.len() as f64 * self.text_height * 0.6;
-        let half_height = self.text_height * self.line_count() as f64;
+        // Approximate bounding box - would need font metrics for accuracy.
+        // A stored height of 0 (R13/R14 records may carry it; later DWG and
+        // DXF do not store one) means the default, as the readers use it, so
+        // the box does not collapse and is the same however it was read.
+        let height = if self.text_height > 0.0 {
+            self.text_height
+        } else {
+            DEFAULT_TEXT_HEIGHT
+        };
+        let half_width = self.text.len() as f64 * height * 0.6;
+        let half_height = height * self.line_count() as f64;
 
         let min = Vector3::new(
             self.insertion_point.x - half_width * 0.1,
@@ -389,6 +397,9 @@ impl Entity for Tolerance {
         super::transform::transform_tolerance(self, transform);
     }
 }
+
+/// The text height used when a record does not store one.
+const DEFAULT_TEXT_HEIGHT: f64 = 0.18;
 
 // ============================================================================
 // GDT Symbol Constants

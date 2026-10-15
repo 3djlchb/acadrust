@@ -11148,8 +11148,10 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_double(21, tolerance.direction.y)?;
         self.writer.write_double(31, tolerance.direction.z)?;
 
-        // Tolerance text
-        self.writer.write_string(1, &tolerance.text)?;
+        // Tolerance text. Its line separator is ^J, as AutoCAD writes it
+        // (the reader turns ^J back into a newline); the generic string
+        // writer would make it the MText paragraph \P, changing the text.
+        self.writer.write_xrecord_string(1, &tolerance.text)?;
 
         Ok(())
     }
