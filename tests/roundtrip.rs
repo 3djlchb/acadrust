@@ -2564,6 +2564,44 @@ fn hatch_elliptic_arc_edge_roundtrip() {
 }
 
 #[test]
+fn hatch_elliptic_arc_edge_angles_are_degrees_in_dxf() {
+    // DXF writes edge angles in degrees, elliptic ones as arc ones; the
+    // model keeps radians.
+    let edge = BoundaryEdge::EllipticArc(EllipticArcEdge {
+        center: Vector2::new(0.0, 0.0),
+        major_axis_endpoint: Vector2::new(2.0, 0.0),
+        minor_axis_ratio: 0.5,
+        start_angle: std::f64::consts::FRAC_PI_2,
+        end_angle: std::f64::consts::PI,
+        counter_clockwise: true,
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let bytes = DxfWriter::new(&doc).write_to_vec().unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let edge_at = (1..lines.len())
+        .find(|&i| lines[i - 1] == "72" && lines[i] == "3")
+        .expect("an elliptic edge");
+    let value = |code: &str| -> f64 {
+        let i = (edge_at..lines.len())
+            .step_by(2)
+            .find(|&i| lines[i - 1] == code)
+            .unwrap();
+        lines[i].parse().unwrap()
+    };
+    assert!((value("50") - 90.0).abs() < 1e-9, "{}", value("50"));
+    assert!((value("51") - 180.0).abs() < 1e-9, "{}", value("51"));
+    let back = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&back);
+    let BoundaryEdge::EllipticArc(e) = &path.edges[0] else {
+        panic!("Expected EllipticArc edge")
+    };
+    assert!((e.start_angle - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+}
+
+#[test]
 fn hatch_spline_edge_roundtrip() {
     let edge = BoundaryEdge::Spline(SplineEdge {
         degree: 3,
