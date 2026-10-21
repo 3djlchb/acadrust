@@ -363,11 +363,13 @@ pub(crate) fn read_document(
         table_name(1, header.references.layer_index).and_then(|name| document.layers.get(name))
     {
         document.header.current_layer_handle = layer.handle;
+        document.header.current_layer_name = layer.name.clone();
     }
     if let Some(style) = table_name(2, header.references.text_style_index)
         .and_then(|name| document.text_styles.get(name))
     {
         document.header.current_text_style_handle = style.handle;
+        document.header.current_text_style_name = style.name.clone();
     }
     let linetype_name = match header.references.linetype_index {
         32767 | -1 => Some("ByLayer"),
@@ -376,6 +378,7 @@ pub(crate) fn read_document(
     };
     if let Some(linetype) = linetype_name.and_then(|name| document.line_types.get(name)) {
         document.header.current_linetype_handle = linetype.handle;
+        document.header.current_linetype_name = linetype.name.clone();
     }
     if let Some(name) = table_name(5, header.references.ucs_index) {
         document.header.model_space_ucs_name = name.to_owned();

@@ -266,3 +266,34 @@ fn menu_limits_use_encoded_bytes_and_reject_nul() {
         variables.menu_name
     );
 }
+
+#[test]
+fn current_layer_style_and_linetype_read_back_by_name_too() {
+    // R12 stores them as table indices; the reader resolved only the
+    // handles, leaving the names at their defaults.
+    use acadrust::tables::{Layer, LineType, TextStyle};
+    let mut source = CadDocument::with_version(DxfVersion::AC1009);
+    let mut layer = Layer::new("BORDER");
+    layer.handle = source.allocate_handle();
+    let mut style = TextStyle::new("TITLES");
+    style.handle = source.allocate_handle();
+    let mut linetype = LineType::new("CENTERS");
+    linetype.handle = source.allocate_handle();
+    source.header.current_layer_handle = layer.handle;
+    source.header.current_layer_name = "BORDER".into();
+    source.header.current_text_style_handle = style.handle;
+    source.header.current_text_style_name = "TITLES".into();
+    source.header.current_linetype_handle = linetype.handle;
+    source.header.current_linetype_name = "CENTERS".into();
+    source.layers.add(layer).unwrap();
+    source.text_styles.add(style).unwrap();
+    source.line_types.add(linetype).unwrap();
+    let bytes = DwgWriter::write_to_vec(&source).unwrap();
+    let back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
+    let h = &back.header;
+    assert_eq!(h.current_layer_name, "BORDER");
+    assert_eq!(h.current_text_style_name, "TITLES");
+    assert_eq!(h.current_linetype_name, "CENTERS");
+    let handle_of = |name: &str| back.layers.get(name).unwrap().handle;
+    assert_eq!(h.current_layer_handle, handle_of("BORDER"));
+}
