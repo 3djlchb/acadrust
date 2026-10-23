@@ -21,9 +21,9 @@ use crate::classes::DxfClassCollection;
 use crate::entities::{EntityCommon, EntityType};
 use crate::objects::{
     BlockEvaluationEdge, BlockEvaluationGraph, BlockEvaluationNode, DataObjectData,
-    DynamicBlockData, DynamicBlockObject, MaterialColor, MaterialTexture, ObjectType,
-    SolidHistory, SolidHistoryBoolean, SolidHistoryNodeBase, SolidHistoryOperation,
-    SolidHistoryTree, XRecordEntry,
+    DynamicBlockData, DynamicBlockObject, MaterialColor, MaterialTexture, ObjectType, SolidHistory,
+    SolidHistoryBoolean, SolidHistoryNodeBase, SolidHistoryOperation, SolidHistoryTree,
+    XRecordEntry,
 };
 use crate::tables::*;
 use crate::types::{Color, DxfVersion, Handle, Vector2, Vector3};
@@ -79,15 +79,19 @@ fn material_checker_texture(entries: &[XRecordEntry]) -> Option<MaterialTexture>
     })
 }
 
-mod semantic_inventory;
+mod dim_header;
 mod legacy_header;
+mod semantic_inventory;
+pub(crate) use dim_header::{
+    apply_dimension_arrow_header, dimension_arrow_dxf_name, sync_dimension_arrow_header,
+};
 pub use legacy_header::LegacyHeaderState;
 pub use semantic_inventory::*;
 mod block_graph;
 pub use block_graph::BlockGraph;
+mod dynamic_properties;
 mod explode;
 mod mirror;
-mod dynamic_properties;
 pub use dynamic_properties::DynamicBlockProperty;
 
 #[cfg(feature = "serde")]
@@ -314,6 +318,10 @@ pub struct HeaderVariables {
     pub dwf_3d_precision: f64,
     /// DIMFXL - Fixed extension line length
     pub dim_fixed_ext_line_length: f64,
+    /// DIMFXLON - Extension lines have the fixed length DIMFXL
+    pub dim_fixed_ext_line_on: bool,
+    /// DIMARCSYM - Arc length symbol placement (0 before the text, 1 above, 2 none)
+    pub dim_arc_symbol: i16,
     /// DIMJOGANG - Jogged radius dimension angle (radians)
     pub dim_jog_angle: f64,
     /// DIMTFILL - Dimension text background fill
@@ -642,6 +650,8 @@ pub struct HeaderVariables {
     pub dim_arrow_block1_handle: Handle,
     /// Dimension arrow block 2 handle
     pub dim_arrow_block2_handle: Handle,
+    /// Leader arrow block handle (DIMLDRBLK)
+    pub dim_leader_arrow_block_handle: Handle,
     /// DIMLWD - Dimension line weight
     pub dim_line_weight: i16,
     /// DIMLWE - Extension line weight
@@ -839,9 +849,9 @@ impl Default for HeaderVariables {
             sort_entities: 127,
             index_control: 0,
             hide_text: 1,
-            // AutoCAD's default: clip frames display (not plotted). Older
+            // ACAD's default: clip frames display (not plotted). Older
             // headers (R2000) don't carry the variable at all, so the default
-            // must match what AutoCAD shows for them.
+            // must match what ACAD shows for them.
             xclip_frame: 2,
             // New drawings show DWF frames without plotting them and hide
             // DGN frames.
@@ -860,6 +870,8 @@ impl Default for HeaderVariables {
             polysolid_height: 4.0,
             dwf_3d_precision: 2.0,
             dim_fixed_ext_line_length: 1.0,
+            dim_fixed_ext_line_on: false,
+            dim_arc_symbol: 0,
             dim_jog_angle: std::f64::consts::FRAC_PI_4,
             dim_text_fill: 0,
             dim_text_fill_color: Color::ByBlock,
@@ -1032,6 +1044,7 @@ impl Default for HeaderVariables {
             dim_arrow_block_handle: Handle::NULL,
             dim_arrow_block1_handle: Handle::NULL,
             dim_arrow_block2_handle: Handle::NULL,
+            dim_leader_arrow_block_handle: Handle::NULL,
             dim_line_weight: -2,     // ByBlock
             dim_ext_line_weight: -2, // ByBlock
 
@@ -1147,7 +1160,7 @@ pub struct FieldDef {
 }
 
 /// Document summary information (the DWG `SummaryInfo` section — the same
-/// properties AutoCAD's DWGPROPS dialog edits). Backs the Document-category
+/// properties ACAD's DWGPROPS dialog edits). Backs the Document-category
 /// dynamic-text fields (Author, Title, Subject, Keywords, Comments,
 /// HyperlinkBase, RevisionNumber) plus arbitrary custom properties.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1172,7 +1185,7 @@ pub struct CadDocument {
     /// Document version
     pub version: DxfVersion,
 
-    /// AutoCAD maintenance release version (from file header byte 0x0B).
+    /// ACAD maintenance release version (from file header byte 0x0B).
     ///
     /// Used to determine encoding variations within a major DWG version.
     /// For AC1024 (R2010), maintenance > 3 triggers an extra 4-byte RL field
@@ -1557,7 +1570,7 @@ impl CadDocument {
             view_rep_refs: std::collections::HashMap::new(),
             section_view_reps: Vec::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
-            // Table handles are well-known fixed values used by AutoCAD
+            // Table handles are well-known fixed values used by ACAD
             next_handle: 0x10,
         };
 
@@ -1688,14 +1701,13 @@ impl CadDocument {
             return false;
         }
         // Unsupported non-graphical objects preserved as raw bytes.
-        let raw_objects = self.objects.values().any(|o| {
-            matches!(
-                o,
-                crate::objects::ObjectType::Unknown {
-                    raw_dwg_data: Some(_),
-                    ..
-                }
-            )
+        let raw_objects = self.objects.values().any(|object| match object {
+            crate::objects::ObjectType::Unknown {
+                raw_dwg_data: Some(_),
+                ..
+            } => true,
+            crate::objects::ObjectType::Arch(value) => value.raw_dwg_data.is_some(),
+            _ => false,
         });
         if raw_objects {
             return true;
@@ -1704,6 +1716,11 @@ impl CadDocument {
         let raw_entities = self.entities.iter().any(|e| {
             let raw = match e.as_ref() {
                 crate::entities::EntityType::Unknown(u) => u.raw_dwg_data.is_some(),
+                crate::entities::EntityType::Extended(entity) => matches!(
+                    &entity.data,
+                    crate::entities::ExtendedEntityData::Arch(data)
+                        if data.raw_dwg_data.is_some()
+                ),
                 _ => false,
             };
             raw || !e.common().extended_data.raw_dwg_eed.is_empty()
@@ -1840,7 +1857,7 @@ impl CadDocument {
         self.header.acad_layout_dict_handle = self.allocate_handle();
         self.header.acad_plotsettings_dict_handle = self.allocate_handle();
         self.header.acad_plotstylename_dict_handle = self.allocate_handle();
-        // R2004+/R2007+ dictionaries (AutoCAD requires these even if empty)
+        // R2004+/R2007+ dictionaries (ACAD requires these even if empty)
         self.header.acad_material_dict_handle = self.allocate_handle();
         self.header.acad_color_dict_handle = self.allocate_handle();
         self.header.acad_visualstyle_dict_handle = self.allocate_handle();
@@ -2527,7 +2544,8 @@ impl CadDocument {
         object.handle = handle;
         object.owner = root;
         object.data = DynamicBlockData::EvaluationGraph(graph);
-        self.objects.insert(handle, ObjectType::DynamicBlock(object));
+        self.objects
+            .insert(handle, ObjectType::DynamicBlock(object));
     }
 
     pub fn solid_history_operation(&self, entity: Handle) -> Option<&SolidHistoryOperation> {
@@ -2658,13 +2676,16 @@ impl CadDocument {
     /// combines them. A boolean step has both solids it joined as operands.
     pub fn solid_history_tree(&self, entity: Handle) -> Option<SolidHistoryTree> {
         let graph = self.solid_history_graph(entity)?;
-        let evaluation = graph.evaluation_graph.and_then(|handle| match self.objects.get(&handle) {
-            Some(ObjectType::DynamicBlock(value)) => match &value.data {
-                DynamicBlockData::EvaluationGraph(evaluation) => Some(evaluation),
-                _ => None,
-            },
-            _ => None,
-        });
+        let evaluation =
+            graph
+                .evaluation_graph
+                .and_then(|handle| match self.objects.get(&handle) {
+                    Some(ObjectType::DynamicBlock(value)) => match &value.data {
+                        DynamicBlockData::EvaluationGraph(evaluation) => Some(evaluation),
+                        _ => None,
+                    },
+                    _ => None,
+                });
         let Some(evaluation) = evaluation else {
             // A parent-linked history is a chain: each step over the last.
             let mut chain = self.solid_history_operations(entity)?.into_iter();
@@ -2756,7 +2777,8 @@ impl CadDocument {
         let tool_evaluation = tool_graph.evaluation_graph?;
         let target_active = self.solid_history_active_node(&target_graph)?;
         let tool_active = self.solid_history_active_node(&tool_graph)?;
-        let evaluation_data = |document: &Self, handle: Handle| match document.objects.get(&handle) {
+        let evaluation_data = |document: &Self, handle: Handle| match document.objects.get(&handle)
+        {
             Some(ObjectType::DynamicBlock(value)) => match &value.data {
                 DynamicBlockData::EvaluationGraph(evaluation) => Some(evaluation.clone()),
                 _ => None,
@@ -2788,7 +2810,12 @@ impl CadDocument {
             .flat_map(|base| [base.step_id.max(0), base.eval.node_id.max(0)])
             .max()?;
         let graph_offset = merged.nodes.iter().map(|node| node.id).max()? + 1;
-        let edge_offset = merged.edges.iter().map(|edge| edge.id).max().map_or(0, |id| id + 1);
+        let edge_offset = merged
+            .edges
+            .iter()
+            .map(|edge| edge.id)
+            .max()
+            .map_or(0, |id| id + 1);
         let shift = |value: i32, by: i32| if value >= 0 { value + by } else { value };
 
         for mut node in tool_data.nodes {
@@ -2836,7 +2863,12 @@ impl CadDocument {
             .node_id();
 
         let id = merged.nodes.iter().map(|node| node.id).max()? + 1;
-        let first_edge = merged.edges.iter().map(|edge| edge.id).max().map_or(0, |id| id + 1);
+        let first_edge = merged
+            .edges
+            .iter()
+            .map(|edge| edge.id)
+            .max()
+            .map_or(0, |id| id + 1);
         let second_edge = first_edge + 1;
         for (expression, edge) in [(target_active, first_edge), (tool_active, second_edge)] {
             let node = merged
@@ -3317,8 +3349,8 @@ impl CadDocument {
     /// The entity is stored in both the flat entity map (used by the DXF
     /// writer) and the *Model_Space block record (used by the DWG writer).
     pub fn add_entity(&mut self, mut entity: EntityType) -> Result<Handle> {
-        entity.common_mut().raw_record = None;   // (re)placed in the document: owner/handle may differ from the source bytes
-        // Allocate a handle if the entity doesn't have one
+        entity.common_mut().raw_record = None; // (re)placed in the document: owner/handle may differ from the source bytes
+                                               // Allocate a handle if the entity doesn't have one
         let handle = if entity.common().handle.is_null() {
             let h = self.allocate_handle();
             entity.as_entity_mut().set_handle(h);
@@ -3468,7 +3500,7 @@ impl CadDocument {
         let idx = *self.entity_index.get(&handle)?;
         self.record_entity_before(handle, Some(Arc::clone(&self.entities[idx])));
         let entity = Arc::make_mut(&mut self.entities[idx]);
-        entity.common_mut().raw_record = None;   // may be modified: verbatim bytes no longer trustworthy
+        entity.common_mut().raw_record = None; // may be modified: verbatim bytes no longer trustworthy
         Some(entity)
     }
 
@@ -3533,8 +3565,7 @@ impl CadDocument {
             EntityType::Dimension(dimension) => {
                 let style = self.dim_styles.get(&dimension.base().style_name);
                 crate::entities::modification::explode::explode_dimension_with_style(
-                    dimension,
-                    style,
+                    dimension, style,
                 )
             }
             _ => entity.explode(),
@@ -3709,12 +3740,42 @@ impl CadDocument {
         Some(entity)
     }
 
-    /// Remove an entity by handle
+    /// Remove an entity by handle.
+    ///
+    /// Arch entities anchored to this one (a door, window, opening, or
+    /// window corner on a wall) are removed with it, along with the anchor and
+    /// associative objects they own.
     pub fn remove_entity(&mut self, handle: Handle) -> Option<EntityType> {
-        let entity = self.remove_entity_arc(handle)?;
-        // Hand back an owned entity: take it out of the Arc if we hold the last
-        // reference (a snapshot may still share it), else clone.
-        Some(Arc::try_unwrap(entity).unwrap_or_else(|a| (*a).clone()))
+        if self.get_entity(handle).is_none() {
+            return None;
+        }
+        let mut queue = vec![handle];
+        let mut doomed = Vec::new();
+        let mut seen = HashSet::new();
+        while let Some(handle) = queue.pop() {
+            if !seen.insert(handle) {
+                continue;
+            }
+            if crate::classes::arch::is_architecture_entity(self, handle) {
+                queue.extend(crate::classes::arch::entities_anchored_to(self, handle));
+            }
+            doomed.push(handle);
+        }
+        let mut removed = None;
+        for handle in doomed {
+            for owned in crate::classes::arch::objects_owned_by(self, handle) {
+                self.objects.remove(&owned);
+                self.reactors_by_handle.remove(&owned);
+            }
+            let Some(entity) = self.remove_entity_arc(handle) else {
+                continue;
+            };
+            let entity = Arc::try_unwrap(entity).unwrap_or_else(|arc| (*arc).clone());
+            if removed.is_none() {
+                removed = Some(entity);
+            }
+        }
+        removed
     }
 
     /// Add a new paper space layout to the document.
@@ -3743,7 +3804,7 @@ impl CadDocument {
         }
 
         // Determine the next *Paper_Space block name.
-        // AutoCAD uses: *Paper_Space, *Paper_Space0, *Paper_Space1, …
+        // ACAD uses: *Paper_Space, *Paper_Space0, *Paper_Space1, …
         let ps_count = self
             .block_records
             .iter()
@@ -3822,13 +3883,16 @@ impl CadDocument {
             })
             .collect();
         for record in self.block_records.iter_mut() {
-            // Preserve an explicitly saved self-reference. AutoCAD leaves this
+            // Preserve an explicitly saved self-reference. ACAD leaves this
             // unresolved when the drawing is loaded as an xref; callers can use
             // the Layout's reverse link when opening it as the root drawing.
             if record.layout == record.handle {
                 continue;
             }
-            if !matches!(self.objects.get(&record.layout), Some(ObjectType::Layout(_))) {
+            if !matches!(
+                self.objects.get(&record.layout),
+                Some(ObjectType::Layout(_))
+            ) {
                 record.layout = owners.get(&record.handle).copied().unwrap_or(Handle::NULL);
             }
         }
@@ -3840,15 +3904,18 @@ impl CadDocument {
         else {
             return;
         };
-        let has_layout = self.objects.values().any(|object| {
-            matches!(object, ObjectType::Layout(layout) if layout.block_record == model)
-        });
+        let has_layout = self.objects.values().any(
+            |object| matches!(object, ObjectType::Layout(layout) if layout.block_record == model),
+        );
         if has_layout {
             return;
         }
 
         let dict_handle = self.header.acad_layout_dict_handle;
-        let dict_handle = if matches!(self.objects.get(&dict_handle), Some(ObjectType::Dictionary(_))) {
+        let dict_handle = if matches!(
+            self.objects.get(&dict_handle),
+            Some(ObjectType::Dictionary(_))
+        ) {
             dict_handle
         } else {
             let handle = self.allocate_handle();
@@ -3918,7 +3985,11 @@ impl CadDocument {
                 recorder.record(entity.common().handle, Some(Arc::clone(entity)));
             }
         }
-        self.entities.iter_mut().map(|entity| { let e = Arc::make_mut(entity); e.common_mut().raw_record = None; e })
+        self.entities.iter_mut().map(|entity| {
+            let e = Arc::make_mut(entity);
+            e.common_mut().raw_record = None;
+            e
+        })
     }
 
     /// Like [`entities_mut`](Self::entities_mut) but keeps `raw_record`: for
@@ -3999,6 +4070,7 @@ impl CadDocument {
             ObjectType::RegisteredClass(value) => Some(value.owner),
             ObjectType::DgnLineStyle(value) => Some(value.owner),
             ObjectType::ProxyObject(value) => Some(value.owner),
+            ObjectType::Arch(value) => Some(value.owner),
             ObjectType::Unknown { owner, .. } => Some(*owner),
             ObjectType::UnderlayDefinition(_) => None,
         }
@@ -4036,7 +4108,11 @@ impl CadDocument {
             .get_mut(&handle)
             .and_then(|xdata| xdata.remove_record(app))
             .is_some();
-        if self.object_xdata.get(&handle).is_some_and(|xdata| xdata.is_empty()) {
+        if self
+            .object_xdata
+            .get(&handle)
+            .is_some_and(|xdata| xdata.is_empty())
+        {
             self.object_xdata.remove(&handle);
         }
         raw || record
@@ -4217,28 +4293,48 @@ impl CadDocument {
         // Older DWG versions down-save multiline attributes as TEXT plus an
         // ACAD_MLATT record. The outer tag may have an artificial _001 suffix;
         // group 2 before the embedded object is the actual attribute tag.
-        let multiline_tags: HashMap<Handle, String> = self.objects.values().filter_map(|object| {
-            let ObjectType::Dictionary(dictionary) = object else { return None; };
-            let record = dictionary.get("ACAD_MLATT")?;
-            let Some(ObjectType::XRecord(record)) = self.objects.get(&record) else { return None; };
-            if !record.entries_complete { return None; }
-            record.entries.iter().take_while(|e| e.code != 1).find_map(|e| {
-                match (e.code, &e.value) {
-                    (2, crate::objects::XRecordValue::String(tag)) => Some((dictionary.owner, tag.clone())),
-                    _ => None,
+        let multiline_tags: HashMap<Handle, String> = self
+            .objects
+            .values()
+            .filter_map(|object| {
+                let ObjectType::Dictionary(dictionary) = object else {
+                    return None;
+                };
+                let record = dictionary.get("ACAD_MLATT")?;
+                let Some(ObjectType::XRecord(record)) = self.objects.get(&record) else {
+                    return None;
+                };
+                if !record.entries_complete {
+                    return None;
                 }
+                record
+                    .entries
+                    .iter()
+                    .take_while(|e| e.code != 1)
+                    .find_map(|e| match (e.code, &e.value) {
+                        (2, crate::objects::XRecordValue::String(tag)) => {
+                            Some((dictionary.owner, tag.clone()))
+                        }
+                        _ => None,
+                    })
             })
-        }).collect();
+            .collect();
         if !multiline_tags.is_empty() {
             for entity in self.entities_mut_keep_raw() {
                 match entity {
                     EntityType::AttributeDefinition(a) => {
-                        if let Some(tag) = multiline_tags.get(&a.common.handle) { a.tag = tag.clone(); }
+                        if let Some(tag) = multiline_tags.get(&a.common.handle) {
+                            a.tag = tag.clone();
+                        }
                     }
-                    EntityType::Insert(i) => for a in &mut i.attributes {
-                        if let Some(tag) = multiline_tags.get(&a.common.handle) { a.tag = tag.clone(); }
-                    },
-                    _ => {},
+                    EntityType::Insert(i) => {
+                        for a in &mut i.attributes {
+                            if let Some(tag) = multiline_tags.get(&a.common.handle) {
+                                a.tag = tag.clone();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -4519,16 +4615,26 @@ impl CadDocument {
 
     pub fn copy_evaluated_block_metadata(&mut self, source: Handle, target: Handle) -> Result<()> {
         for handle in [source, target] {
-            if !self.block_records.iter().any(|b| b.handle == handle && b.name.starts_with("*U")) {
+            if !self
+                .block_records
+                .iter()
+                .any(|b| b.handle == handle && b.name.starts_with("*U"))
+            {
                 return Err("Expected an evaluated anonymous block record".into());
             }
         }
         let dictionary = if let Some(handle) = self.extension_dictionary_handle(source) {
             match self.objects.get(&handle) {
-                Some(ObjectType::Dictionary(d)) if d.entries.is_empty() && d.xdictionary_handle.is_none() => Some(d.clone()),
+                Some(ObjectType::Dictionary(d))
+                    if d.entries.is_empty() && d.xdictionary_handle.is_none() =>
+                {
+                    Some(d.clone())
+                }
                 _ => return Err("Evaluated block has additional object relationships".into()),
             }
-        } else { None };
+        } else {
+            None
+        };
         if let Some(data) = self.eed_by_handle.get(&source).cloned() {
             self.eed_by_handle.insert(target, data);
         }
@@ -4537,7 +4643,8 @@ impl CadDocument {
             dictionary.handle = handle;
             dictionary.owner = target;
             dictionary.reactors.clear();
-            self.objects.insert(handle, ObjectType::Dictionary(dictionary));
+            self.objects
+                .insert(handle, ObjectType::Dictionary(dictionary));
             self.xdic_by_handle.insert(target, handle);
         }
         Ok(())
@@ -4975,9 +5082,11 @@ impl CadDocument {
             }
         }
         for e in self.entities.iter() {
-            let h = e.common().handle.value();
-            if h > 0 {
-                used_handles.insert(h);
+            if !matches!(e.as_ref(), EntityType::Block(_) | EntityType::BlockEnd(_)) {
+                let h = e.common().handle.value();
+                if h > 0 {
+                    used_handles.insert(h);
+                }
             }
         }
         // Snapshot the handles used by NON-object records. Object keys are
@@ -5077,7 +5186,9 @@ impl CadDocument {
                 used_handles.insert(handle.value());
             }
         }
+        let mut marker_remaps = Vec::new();
         for br in self.block_records.iter_mut() {
+            let old_block_handle = br.block_entity_handle;
             if br.block_entity_handle.is_null()
                 || used_handles.contains(&br.block_entity_handle.value())
             {
@@ -5085,15 +5196,50 @@ impl CadDocument {
                 self.next_handle += 1;
                 br.block_entity_handle = h;
             }
+            if old_block_handle != br.block_entity_handle {
+                marker_remaps.push((old_block_handle, br.block_entity_handle, br.handle, true));
+            }
             used_handles.insert(br.block_entity_handle.value());
 
+            let old_end_handle = br.block_end_handle;
             if br.block_end_handle.is_null() || used_handles.contains(&br.block_end_handle.value())
             {
                 let h = Handle::new(self.next_handle);
                 self.next_handle += 1;
                 br.block_end_handle = h;
             }
+            if old_end_handle != br.block_end_handle {
+                marker_remaps.push((old_end_handle, br.block_end_handle, br.handle, false));
+            }
             used_handles.insert(br.block_end_handle.value());
+        }
+        for (old_handle, new_handle, owner, is_block) in marker_remaps {
+            if old_handle.is_null() {
+                continue;
+            }
+            let Some(index) = self.entities.iter().position(|entity| {
+                entity.common().handle == old_handle
+                    && if is_block {
+                        matches!(entity.as_ref(), EntityType::Block(_))
+                    } else {
+                        matches!(entity.as_ref(), EntityType::BlockEnd(_))
+                    }
+            }) else {
+                continue;
+            };
+            let marker = Arc::make_mut(&mut self.entities[index]);
+            marker.common_mut().handle = new_handle;
+            marker.common_mut().owner_handle = owner;
+            self.entity_index.remove(&old_handle);
+            if let Some((other_index, _)) = self
+                .entities
+                .iter()
+                .enumerate()
+                .find(|(_, entity)| entity.common().handle == old_handle)
+            {
+                self.entity_index.insert(old_handle, other_index);
+            }
+            self.entity_index.insert(new_handle, index);
         }
 
         // --- 1d. Resolve object handle collisions ---

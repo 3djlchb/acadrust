@@ -250,7 +250,9 @@ pub fn read_header_with_encoding(
         data[size_offset + 3],
     ]);
     if section_size < 0 {
-        return Err(DxfError::Parse("Header section has a negative size".to_string()));
+        return Err(DxfError::Parse(
+            "Header section has a negative size".to_string(),
+        ));
     }
     let section_size = section_size as usize;
     size_offset += 4;
@@ -624,7 +626,7 @@ fn read_header_fields(r: &mut SectionReader, v: DxfVersion, h: &mut HeaderVariab
     }
 
     if r2007_plus(v) {
-        let _ = r.read_bit_short(); // DIMARCSYM
+        h.dim_arc_symbol = r.read_bit_short(); // DIMARCSYM
     }
 
     // ── Dimension sizes (Common) ──
@@ -687,7 +689,7 @@ fn read_header_fields(r: &mut SectionReader, v: DxfVersion, h: &mut HeaderVariab
 
     // R2007+: DIMFXLON
     if r2007_plus(v) {
-        let _ = r.read_bit(); // DimensionIsExtensionLineLengthFixed
+        h.dim_fixed_ext_line_on = r.read_bit(); // DimensionIsExtensionLineLengthFixed
     }
 
     // R2010+: extra dimension fields
@@ -702,10 +704,10 @@ fn read_header_fields(r: &mut SectionReader, v: DxfVersion, h: &mut HeaderVariab
     // R2000+ dimension handles
     if r2000_plus(v) {
         h.dim_text_style_handle = Handle::new(r.read_handle());
-        let _ = r.read_handle(); // DIMLDRBLK
-        let _ = r.read_handle(); // DIMBLK
-        let _ = r.read_handle(); // DIMBLK1
-        let _ = r.read_handle(); // DIMBLK2
+        h.dim_leader_arrow_block_handle = Handle::new(r.read_handle()); // DIMLDRBLK
+        h.dim_arrow_block_handle = Handle::new(r.read_handle()); // DIMBLK
+        h.dim_arrow_block1_handle = Handle::new(r.read_handle()); // DIMBLK1
+        h.dim_arrow_block2_handle = Handle::new(r.read_handle()); // DIMBLK2
     }
 
     // R2007+ dimension linetype handles

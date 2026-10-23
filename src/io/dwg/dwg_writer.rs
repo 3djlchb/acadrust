@@ -89,33 +89,32 @@ impl DwgWriter {
         // the controls, entries and handle map all agree (issue #51/#64
         // class of bug).
         let mut owned;
-        let document: &CadDocument = if document.has_null_table_entries()
-            || document.version < DxfVersion::AC1027
-        {
-            owned = document.clone();
-            if owned.has_null_table_entries() {
-                owned.assign_table_entry_handles();
-            }
-            if owned.version < DxfVersion::AC1027 {
-                // A table read from a file of this version is already valid
-                // for it, and the verbatim records copied from that file
-                // carry its class numbers: leave it as it is.
-                if owned.dwg_source_version != Some(owned.version) {
-                    prepare_legacy_classes(&mut owned);
+        let document: &CadDocument =
+            if document.has_null_table_entries() || document.version < DxfVersion::AC1027 {
+                owned = document.clone();
+                if owned.has_null_table_entries() {
+                    owned.assign_table_entry_handles();
                 }
-                if owned.version < DxfVersion::AC1018 {
-                    add_missing_object_classes(&mut owned);
+                if owned.version < DxfVersion::AC1027 {
+                    // A table read from a file of this version is already valid
+                    // for it, and the verbatim records copied from that file
+                    // carry its class numbers: leave it as it is.
+                    if owned.dwg_source_version != Some(owned.version) {
+                        prepare_legacy_classes(&mut owned);
+                    }
+                    if owned.version < DxfVersion::AC1018 {
+                        add_missing_object_classes(&mut owned);
+                    }
                 }
-            }
-            if owned.version < DxfVersion::AC1027 {
-                prepare_legacy_document(&mut owned);
-                crate::objects::store_table_style_roundtrip(&mut owned);
-                crate::objects::store_visual_style_roundtrip(&mut owned);
-            }
-            &owned
-        } else {
-            document
-        };
+                if owned.version < DxfVersion::AC1027 {
+                    prepare_legacy_document(&mut owned);
+                    crate::objects::store_table_style_roundtrip(&mut owned);
+                    crate::objects::store_visual_style_roundtrip(&mut owned);
+                }
+                &owned
+            } else {
+                document
+            };
 
         let result = if uses_ac21_format(version) {
             write_ac21(&mut output, document, version)
@@ -175,9 +174,10 @@ impl DwgWriter {
 
 pub(crate) fn prepare_active_viewport_elevation(document: &mut std::borrow::Cow<'_, CadDocument>) {
     let elevation = document.header.elevation;
-    let needs_elevation = elevation != 0.0 && document.vports.iter().any(|viewport| {
-        viewport.name.eq_ignore_ascii_case("*ACTIVE") && viewport.ucs_elevation == 0.0
-    });
+    let needs_elevation = elevation != 0.0
+        && document.vports.iter().any(|viewport| {
+            viewport.name.eq_ignore_ascii_case("*ACTIVE") && viewport.ucs_elevation == 0.0
+        });
     if needs_elevation {
         // CAD hosts activate the VPORT's UCS elevation when loading the file,
         // so a default zero viewport would mask the nonzero header setting.
@@ -194,8 +194,15 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
         if document.version < DxfVersion::AC1018 {
             if let crate::entities::EntityType::Insert(insert) = entity {
                 for attribute in &insert.attributes {
-                    if attribute.common.color_name.as_ref().is_some_and(|name| !name.is_empty())
-                        || attribute.common.color_book_handle.is_some_and(|handle| !handle.is_null())
+                    if attribute
+                        .common
+                        .color_name
+                        .as_ref()
+                        .is_some_and(|name| !name.is_empty())
+                        || attribute
+                            .common
+                            .color_book_handle
+                            .is_some_and(|handle| !handle.is_null())
                     {
                         return Err(DxfError::NotImplemented(format!(
                             "Named color on attribute {} requires DWG R2004 or later",
@@ -206,17 +213,45 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
             }
         }
         if document.version < DxfVersion::AC1018
-            && (entity.common().color_name.as_ref().is_some_and(|name| !name.is_empty())
-                || entity.common().color_book_handle.is_some_and(|handle| !handle.is_null()))
+            && (entity
+                .common()
+                .color_name
+                .as_ref()
+                .is_some_and(|name| !name.is_empty())
+                || entity
+                    .common()
+                    .color_book_handle
+                    .is_some_and(|handle| !handle.is_null()))
         {
             return Err(DxfError::NotImplemented(format!(
                 "Named color on entity {} requires DWG R2004 or later",
                 entity.common().handle
             )));
         }
+        if let crate::entities::EntityType::Extended(entity) = entity {
+            if let crate::entities::ExtendedEntityData::Arch(data) = &entity.data {
+                if data.raw_dwg_data.is_none()
+                    || data
+                        .dwg_source_version
+                        .is_some_and(|version| version != document.version)
+                    || document.version == DxfVersion::AC1009
+                {
+                    return Err(DxfError::NotImplemented(format!(
+                        "Cannot encode Arch entity {} at handle {} as DWG {:?}: compatible raw DWG data is required",
+                        data.dxf_name, entity.common.handle, document.version
+                    )));
+                }
+                crate::io::dwg::dwg_stream_writers::DwgObjectWriter::validate_architecture_record(
+                    data,
+                    document.version,
+                )?;
+            }
+        }
         if let crate::entities::EntityType::Unknown(entity) = entity {
             if entity.raw_dwg_data.is_none()
-                || entity.dwg_source_version.is_some_and(|version| version != document.version)
+                || entity
+                    .dwg_source_version
+                    .is_some_and(|version| version != document.version)
                 || document.version == DxfVersion::AC1009
             {
                 return Err(DxfError::NotImplemented(format!(
@@ -227,9 +262,28 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
         }
     }
     for object in document.objects.values() {
+        if let crate::objects::ObjectType::Arch(object) = object {
+            if object.raw_dwg_data.is_none()
+                || object
+                    .raw_dwg_version
+                    .is_some_and(|version| version != document.version)
+                || document.version == DxfVersion::AC1009
+            {
+                return Err(DxfError::NotImplemented(format!(
+                    "Cannot encode Arch object {} at handle {} as DWG {:?}: compatible raw DWG data is required",
+                    object.dxf_name, object.handle, document.version
+                )));
+            }
+            DwgObjectWriter::validate_architecture_object(object, document.version)?;
+        }
         if let crate::objects::ObjectType::Unknown {
-            type_name, handle, raw_dwg_data, raw_dwg_version, ..
-        } = object {
+            type_name,
+            handle,
+            raw_dwg_data,
+            raw_dwg_version,
+            ..
+        } = object
+        {
             if raw_dwg_data.is_none()
                 || raw_dwg_version.is_some_and(|version| version != document.version)
                 || document.version == DxfVersion::AC1009
@@ -251,10 +305,19 @@ fn prepare_book_colors(document: &mut std::borrow::Cow<'_, CadDocument>) -> Resu
         let Some(name) = common.color_name.as_ref().filter(|name| !name.is_empty()) else {
             return;
         };
-        let existing = common.color_book_handle.and_then(|handle| document.objects.get(&handle));
+        let existing = common
+            .color_book_handle
+            .and_then(|handle| document.objects.get(&handle));
         if let Some(ObjectType::BookColor(color)) = existing {
-            let identity = crate::io::dxf::join_color_book_name(Some(&color.book_name), Some(&color.color_name));
-            if identity.as_ref().is_some_and(|identity| identity.eq_ignore_ascii_case(name)) && color.color == common.color {
+            let identity = crate::io::dxf::join_color_book_name(
+                Some(&color.book_name),
+                Some(&color.color_name),
+            );
+            if identity
+                .as_ref()
+                .is_some_and(|identity| identity.eq_ignore_ascii_case(name))
+                && color.color == common.color
+            {
                 return;
             }
         }
@@ -283,11 +346,19 @@ fn prepare_book_colors(document: &mut std::borrow::Cow<'_, CadDocument>) -> Resu
         let (book_name, color_name) = crate::io::dxf::split_color_book_name(&name);
         let book_name = book_name.unwrap_or_default();
         let color_name = color_name.unwrap_or_default();
-        let existing = output.objects.iter().find_map(|(handle, object)| match object {
-            ObjectType::BookColor(value)
-                if value.book_name == book_name && value.color_name == color_name && value.color == color => Some(*handle),
-            _ => None,
-        });
+        let existing = output
+            .objects
+            .iter()
+            .find_map(|(handle, object)| match object {
+                ObjectType::BookColor(value)
+                    if value.book_name == book_name
+                        && value.color_name == color_name
+                        && value.color == color =>
+                {
+                    Some(*handle)
+                }
+                _ => None,
+            });
         let handle = existing.unwrap_or_else(|| {
             let handle = output.allocate_handle();
             let mut value = BookColor::new();
@@ -685,9 +756,10 @@ fn prepare_roundtrip_records(document: &mut std::borrow::Cow<'_, CadDocument>) {
         let is_visual_style = matches!(object, ObjectType::VisualStyle(_));
         for (name, child) in &entries.entries {
             let drop = match (name.as_str(), document.objects.get(child)) {
-                ("ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP", Some(ObjectType::DataObject(_))) => {
-                    !is_visual_style
-                }
+                (
+                    "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP",
+                    Some(ObjectType::DataObject(_)),
+                ) => !is_visual_style,
                 ("ACAD_XREC_ROUNDTRIP", Some(ObjectType::XRecord(record))) => {
                     let prefix = if is_visual_style {
                         "RTVS"
@@ -699,10 +771,7 @@ fn prepare_roundtrip_records(document: &mut std::borrow::Cow<'_, CadDocument>) {
                         .iter()
                         .filter(|entry| entry.code == 102)
                         .filter_map(|entry| key_of(&entry.value))
-                        .all(|key| {
-                            key.starts_with(prefix)
-                                || (!is_visual_style && key.is_empty())
-                        })
+                        .all(|key| key.starts_with(prefix) || (!is_visual_style && key.is_empty()))
                         && record.entries.iter().any(|entry| entry.code == 102)
                 }
                 _ => false,
@@ -759,9 +828,10 @@ fn entity_class_name(entity: &crate::entities::EntityType) -> &str {
 /// record without a valid type code, so it is kept, after the profile.
 fn prepare_legacy_classes(document: &mut CadDocument) {
     let entity_classes = document.entities().map(entity_class_name);
-    let object_classes = document.objects.values().flat_map(
-        crate::io::dwg::dwg_stream_writers::object_writer::objects::object_class_names,
-    );
+    let object_classes = document
+        .objects
+        .values()
+        .flat_map(crate::io::dwg::dwg_stream_writers::object_writer::objects::object_class_names);
     // FIELD / FIELDLIST records exist from R2004 on and are written from the
     // document's field table, not from `objects`.
     let field_classes: &[&str] = if document.version >= DxfVersion::AC1018 {
@@ -769,7 +839,9 @@ fn prepare_legacy_classes(document: &mut CadDocument) {
     } else {
         &[]
     };
-    let field_classes = field_classes.iter().map(|name| std::borrow::Cow::Owned(name.to_string()));
+    let field_classes = field_classes
+        .iter()
+        .map(|name| std::borrow::Cow::Owned(name.to_string()));
     let mut seen = std::collections::HashSet::new();
     let required: Vec<_> = entity_classes
         .map(std::borrow::Cow::Borrowed)
@@ -802,7 +874,11 @@ fn add_missing_object_classes(document: &mut CadDocument) {
         .filter_map(|names| {
             defaults
                 .iter()
-                .find(|class| names.iter().any(|name| class.dxf_name.eq_ignore_ascii_case(name)))
+                .find(|class| {
+                    names
+                        .iter()
+                        .any(|name| class.dxf_name.eq_ignore_ascii_case(name))
+                })
                 .cloned()
         })
         .collect();
@@ -978,8 +1054,9 @@ fn uses_paged_format(version: DxfVersion) -> bool {
 /// dictionary, causing IntelliCAD (and other CAD apps) to report
 /// "null object id" for every object.
 ///
-/// Also updates EXTMIN/EXTMAX from the computed model-space extents so that
-/// "Zoom Extents" works correctly when the file is first opened.
+/// A document without EXTMIN/EXTMAX (the 1e20 defaults) gets the computed
+/// model-space extents, so that "Zoom Extents" works when the file is first
+/// opened; extents the document holds are kept.
 fn prepare_header(
     document: &CadDocument,
     handle_map: &[(u64, u32)],
@@ -1065,9 +1142,8 @@ fn prepare_header(
     if let Some(br) = document.block_records.get("*Model_Space") {
         h.model_space_block_handle = br.handle;
     }
-    if let Some(br) = document.block_records.get("*Paper_Space") {
-        h.paper_space_block_handle = br.handle;
-    }
+    h.paper_space_block_handle =
+        super::dwg_stream_writers::object_writer::paper_space_block_handle(document);
 
     // ── Sync current style handles (validate against actual objects) ──
     // CLAYER: must point to an actual layer; fall back to "0" if invalid
@@ -1227,6 +1303,12 @@ fn prepare_header(
         }
     }
 
+    // DIMBLK / DIMBLK1 / DIMBLK2 / DIMLDRBLK. DXF stores the names; a DWG
+    // stores the block handles. A null handle is the default closed-filled arrow.
+    // A name such as ArchTick selects the block _ArchTick, and a handle that
+    // names no block is cleared.
+    crate::document::apply_dimension_arrow_header(&document.block_records, &mut h);
+
     // ── Correct HANDSEED ──
     let max_handle = handle_map.iter().map(|&(ha, _)| ha).max().unwrap_or(0);
     if h.handle_seed <= max_handle {
@@ -1234,9 +1316,23 @@ fn prepare_header(
     }
 
     // ── Update model-space extents ──
+    // Extents the document already holds (read from a file, or set by the
+    // caller) are kept: EXTMIN/EXTMAX are what the authoring application last
+    // computed, and the entity bounding boxes are no substitute (an XLINE or
+    // RAY is unbounded, and block references are boxed by their insertion
+    // point). Only a document without extents gets the computed ones.
+    let (min, max) = (h.model_space_extents_min, h.model_space_extents_max);
+    let has_extents = [min.x, min.y, min.z, max.x, max.y, max.z]
+        .iter()
+        .all(|c| c.is_finite() && c.abs() < 1e20)
+        && min.x <= max.x
+        && min.y <= max.y
+        && min.z <= max.z;
     if let Some(ref ext) = extents {
-        h.model_space_extents_min = ext.min;
-        h.model_space_extents_max = ext.max;
+        if !has_extents {
+            h.model_space_extents_min = ext.min;
+            h.model_space_extents_max = ext.max;
+        }
     }
 
     h
@@ -1389,7 +1485,7 @@ fn write_ac18<W: Write + Seek>(
     // R2010+ per-section "extra RL" (which locates the header/classes string
     // stream) on `maintenance_version > 3`. A fresh document defaults to 0,
     // which for R2013 (AC1027) omits that RL and makes the header string
-    // stream unreadable in AutoCAD/TrueView. Use the canonical per-version
+    // stream unreadable in ACAD/TrueView. Use the canonical per-version
     // value so R2013 files are always well-formed.
     let maint = aux_header_writer::dwg_maintenance_version(version) as u8;
 
@@ -1998,31 +2094,35 @@ fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
 
 /// Build the AcDsPrototype_1b file header ("jard", 128 bytes).
 ///
-/// Fourteen little-endian `RL` fields per the ODA datastore layout (field names
-/// follow libredwg's `acds.spec`), then zero padding to 128 bytes. A strict
-/// reader validates these; a wrong `ds_version` in particular
-/// made the whole section read as "invalid data". The segment ordering emitted
+/// Fourteen little-endian 32-bit fields in ODA §24.1 order, followed by zero
+/// padding to the declared header size. Data storage revision is distinct
+/// from the preceding version field. The segment ordering emitted
 /// by [`build_acds_prototype`] is fixed (segidx=1, _data_=2, thumbnail=3,
 /// datidx=4, schdat=5, schidx=6, search=7), so the `*_segidx` pointers are
 /// constant.
 fn build_acds_jard_header(segidx_offset: u32, file_size: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 128];
-    h[0..4].copy_from_slice(b"jard"); // file_signature
-    h[4..8].copy_from_slice(&128u32.to_le_bytes()); // file_header_size
-    h[8..12].copy_from_slice(&2u32.to_le_bytes()); // unknown_1 (always 2)
-    h[12..16].copy_from_slice(&2u32.to_le_bytes()); // version (always 2)
-    h[16..20].copy_from_slice(&0u32.to_le_bytes()); // unknown_2 (always 0)
-    h[20..24].copy_from_slice(&1u32.to_le_bytes()); // ds_version (datastore revision)
-    h[24..28].copy_from_slice(&segidx_offset.to_le_bytes()); // segidx_offset
-    h[28..32].copy_from_slice(&0u32.to_le_bytes()); // segidx_unknown
-    h[32..36].copy_from_slice(&8u32.to_le_bytes()); // num_segidx (null + 7 segments)
-    h[36..40].copy_from_slice(&6u32.to_le_bytes()); // schidx_segidx
-    h[40..44].copy_from_slice(&4u32.to_le_bytes()); // datidx_segidx
-    h[44..48].copy_from_slice(&7u32.to_le_bytes()); // search_segidx
-    h[48..52].copy_from_slice(&0u32.to_le_bytes()); // prvsav_segidx
-    h[52..56].copy_from_slice(&file_size.to_le_bytes()); // file_size
-                                                         // Remaining bytes are zero (padding to file_header_size).
-    h
+    let fields = [
+        u32::from_le_bytes(*b"jard"), // file signature
+        128,                          // file header size
+        2,                            // unknown 1
+        2,                            // version
+        0,                            // unknown 2
+        1,                            // data storage revision
+        segidx_offset,                // segment index offset
+        0,                            // segment index unknown
+        8,                            // segment index entry count (null + 7)
+        6,                            // schema index segment index
+        4,                            // data index segment index
+        7,                            // search segment index
+        0,                            // previous save index
+        file_size,
+    ];
+    let mut header = Vec::with_capacity(fields[1] as usize);
+    for field in fields {
+        header.extend_from_slice(&field.to_le_bytes());
+    }
+    header.resize(fields[1] as usize, 0);
+    header
 }
 
 /// Build `_data_` segment id=2 containing one SAB record per ACIS entity.
@@ -2406,13 +2506,18 @@ mod tests {
                 ..Default::default()
             },
         ));
-        doc.objects.insert(handle, ObjectType::DynamicBlock(history));
-        let mut source = DwgReader::from_stream(Cursor::new(DwgWriter::write_to_vec(&doc).unwrap()))
-            .read()
-            .unwrap();
+        doc.objects
+            .insert(handle, ObjectType::DynamicBlock(history));
+        let mut source =
+            DwgReader::from_stream(Cursor::new(DwgWriter::write_to_vec(&doc).unwrap()))
+                .read()
+                .unwrap();
         let original = source.raw_records[&handle.value()].1.data.clone();
         source
-            .add_entity(EntityType::Line(Line::from_points(Vector3::ZERO, Vector3::UNIT_X)))
+            .add_entity(EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::UNIT_X,
+            )))
             .unwrap();
         let saved = DwgReader::from_stream(Cursor::new(DwgWriter::write_to_vec(&source).unwrap()))
             .read()
@@ -2547,10 +2652,16 @@ mod tests {
             .read()
             .unwrap();
 
-        assert_eq!(class_names(&decoded.classes), class_names(&document.classes));
+        assert_eq!(
+            class_names(&decoded.classes),
+            class_names(&document.classes)
+        );
         for class in document.classes.iter() {
             assert_eq!(
-                decoded.classes.get_by_name(&class.dxf_name).map(|c| c.class_number),
+                decoded
+                    .classes
+                    .get_by_name(&class.dxf_name)
+                    .map(|c| c.class_number),
                 Some(class.class_number),
                 "{} was renumbered",
                 class.dxf_name

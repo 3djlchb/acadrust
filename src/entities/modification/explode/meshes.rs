@@ -39,7 +39,7 @@ pub(super) fn explode_mesh(mesh: &Mesh) -> Vec<EntityType> {
     result
 }
 
-/// AutoCAD emits one 3DFACE for each mesh face, retaining quads instead of
+/// ACAD emits one 3DFACE for each mesh face, retaining quads instead of
 /// introducing a diagonal that was not present in the source mesh.
 pub(super) fn explode_mesh_native(mesh: &Mesh) -> Vec<EntityType> {
     let mut result = Vec::with_capacity(mesh.faces.len());
@@ -226,4 +226,3 @@ pub(super) fn explode_polygon_mesh_native(mesh: &PolygonMeshEntity) -> Vec<Entit
 // ============================================================================
 // EntityType::explode
 // ============================================================================
-

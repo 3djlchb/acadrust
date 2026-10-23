@@ -19,7 +19,11 @@ pub(super) fn format_dimension_value(dim: &Dimension, style: &DimStyle) -> Strin
     if style.dimdsep == 44 {
         text = text.replace('.', ",");
     }
-    let zero_flags = if is_angular { style.dimazin } else { style.dimzin };
+    let zero_flags = if is_angular {
+        style.dimazin
+    } else {
+        style.dimzin
+    };
     if zero_flags & 1 != 0 {
         if let Some(index) = text.find("0.") {
             if index == 0 {
@@ -68,7 +72,7 @@ pub(super) fn dimension_text_value(dim: &Dimension, style: Option<&DimStyle>) ->
                 .unwrap_or_else(|| format!("{:.4}", dim.measurement())),
         );
     };
-    // A single space is AutoCAD's documented text suppression convention.
+    // A single space is ACAD's documented text suppression convention.
     if override_text == " " {
         return None;
     }
@@ -212,11 +216,13 @@ pub(crate) fn explode_dimension_with_style(
                 projected_pair(d.first_point, d.second_point, d.definition_point, direction);
             if let Some(style) = style {
                 if !style.dimse1 {
-                    let (start, end) = dimension_extension_points(d.first_point, first_on_line, style);
+                    let (start, end) =
+                        dimension_extension_points(d.first_point, first_on_line, style);
                     result.push(line_entity(start, end, 0.0, base.normal, common));
                 }
                 if !style.dimse2 {
-                    let (start, end) = dimension_extension_points(d.second_point, second_on_line, style);
+                    let (start, end) =
+                        dimension_extension_points(d.second_point, second_on_line, style);
                     result.push(line_entity(start, end, 0.0, base.normal, common));
                 }
                 if !style.dimsd1 || !style.dimsd2 {
@@ -245,7 +251,7 @@ pub(crate) fn explode_dimension_with_style(
                     base.normal,
                     common,
                 ));
-                // AutoCAD leaves a text gap in the dimension line.  Emit the two
+                // ACAD leaves a text gap in the dimension line.  Emit the two
                 // visible portions around the text location.
                 let axis = second_on_line - first_on_line;
                 let t = if axis.length_squared() > 1e-20 {
@@ -270,11 +276,13 @@ pub(crate) fn explode_dimension_with_style(
             );
             if let Some(style) = style {
                 if !style.dimse1 {
-                    let (start, end) = dimension_extension_points(d.first_point, first_on_line, style);
+                    let (start, end) =
+                        dimension_extension_points(d.first_point, first_on_line, style);
                     result.push(line_entity(start, end, 0.0, base.normal, common));
                 }
                 if !style.dimse2 {
-                    let (start, end) = dimension_extension_points(d.second_point, second_on_line, style);
+                    let (start, end) =
+                        dimension_extension_points(d.second_point, second_on_line, style);
                     result.push(line_entity(start, end, 0.0, base.normal, common));
                 }
                 if !style.dimsd1 || !style.dimsd2 {
@@ -304,8 +312,14 @@ pub(crate) fn explode_dimension_with_style(
                     common,
                 ));
                 // Keep the measured alignment and split the dimension line at
-                // the text location, matching AutoCAD's five LINE result.
-                result.push(line_entity(d.first_point, d.second_point, 0.0, base.normal, common));
+                // the text location, matching ACAD's five LINE result.
+                result.push(line_entity(
+                    d.first_point,
+                    d.second_point,
+                    0.0,
+                    base.normal,
+                    common,
+                ));
                 let axis = second_on_line - first_on_line;
                 let t = if axis.length_squared() > 1e-20 {
                     ((base.text_middle_point - first_on_line).dot(&axis) / axis.length_squared())
@@ -430,7 +444,13 @@ pub(crate) fn explode_dimension_with_style(
                 || (index == 1 && style.dimblk2_name.eq_ignore_ascii_case("_none"))
         });
         if !arrow_suppressed {
-            result.push(dimension_style_arrow(tip, toward, arrow_size, common, base.normal));
+            result.push(dimension_style_arrow(
+                tip,
+                toward,
+                arrow_size,
+                common,
+                base.normal,
+            ));
         }
     }
     if let Some(text_value) = text_value {
@@ -443,4 +463,3 @@ pub(crate) fn explode_dimension_with_style(
 pub(super) fn explode_dimension(dim: &Dimension) -> Vec<EntityType> {
     explode_dimension_with_style(dim, None)
 }
-

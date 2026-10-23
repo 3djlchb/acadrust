@@ -25,7 +25,7 @@ use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 /// values. In the [`Matrix4`] (column-vector) convention that is one
 /// matrix row per group of four, translation last:
 /// `[m00, m01, m02, Tx, m10, m11, m12, Ty, m20, m21, m22, Tz]`.
-/// AutoCAD writes an XCLIP of an insert at (5, 5) as
+/// ACAD writes an XCLIP of an insert at (5, 5) as
 /// `[1, 0, 0, -5, 0, 1, 0, -5, 0, 0, 1, 0]`; reading it as four columns of
 /// three turns `y` into a constant and collapses the boundary to a line.
 fn matrix_from_dxf_4x3(v: &[f64]) -> Matrix4 {
@@ -857,7 +857,7 @@ fn class_dxf_hatch_context_boundary(
                 center: fields.point2(section, 10),
                 major_axis_endpoint: fields.point2(section, 11),
                 minor_axis_ratio: fields.f64(section, 40),
-                // Degrees in DXF, radians in the model (as for arc edges).
+                // Groups 50/51 are degrees, same as a circular edge.
                 start_angle: fields.f64(section, 50).to_radians(),
                 end_angle: fields.f64(section, 51).to_radians(),
                 counter_clockwise: fields.bool(section, 73),
@@ -1038,7 +1038,7 @@ impl DynamicDxfFields {
             .unwrap_or(Handle::NULL)
     }
 
-    /// Vector stored as 140/141/142 (AutoCAD) or 140/150/160 (older acadrust output).
+    /// Vector stored as 140/141/142 (ACAD) or 140/150/160 (older acadrust output).
     fn vector_140(&self, section: &str) -> Vector3 {
         let pick = |a: i32, b: i32| {
             if self.values(section, a).is_empty() {
@@ -1068,7 +1068,7 @@ fn dynamic_dxf_eval(fields: &DynamicDxfFields) -> BlockEvalExpression {
         // No 70 group means "no value" (-9999).
         .unwrap_or(-9999);
     let value = match value_code {
-        // AutoCAD writes a real value as 140; older acadrust output used 40.
+        // ACAD writes a real value as 140; older acadrust output used 40.
         40 if !fields.values(section, 140).is_empty() => {
             BlockEvalValue::Real(fields.f64(section, 140))
         }
@@ -1567,7 +1567,8 @@ impl<'a> SectionReader<'a> {
 
             let var_name = pair.value_string.clone();
             match var_name.as_str() {
-                "$VIEWCTR" | "$VIEWDIR" | "$TARGET" | "$SNAPBASE" | "$SNAPUNIT" | "$GRIDUNIT" | "$AXISUNIT" => {
+                "$VIEWCTR" | "$VIEWDIR" | "$TARGET" | "$SNAPBASE" | "$SNAPUNIT" | "$GRIDUNIT"
+                | "$AXISUNIT" => {
                     let state = hdr.legacy.get_or_insert_with(Default::default);
                     let mut point = Vector3::ZERO;
                     self.read_header_point3(&mut point)?;
@@ -1582,7 +1583,9 @@ impl<'a> SectionReader<'a> {
                         _ => unreachable!(),
                     }
                 }
-                "$SNAPMODE" | "$SNAPSTYLE" | "$SNAPISOPAIR" | "$GRIDMODE" | "$AXISMODE" | "$VIEWRES" | "$FASTZOOM" | "$VIEWMODE" | "$FLATLAND" | "$UCSICON" | "$UNITMODE" => {
+                "$SNAPMODE" | "$SNAPSTYLE" | "$SNAPISOPAIR" | "$GRIDMODE" | "$AXISMODE"
+                | "$VIEWRES" | "$FASTZOOM" | "$VIEWMODE" | "$FLATLAND" | "$UCSICON"
+                | "$UNITMODE" => {
                     if let Some(value) = self.reader.read_pair()?.and_then(|pair| pair.as_i16()) {
                         let state = hdr.legacy.get_or_insert_with(Default::default);
                         match var_name.as_str() {
@@ -1602,7 +1605,8 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 "$VIEWSIZE" | "$SNAPANG" | "$FRONTZ" | "$BACKZ" => {
-                    if let Some(value) = self.reader.read_pair()?.and_then(|pair| pair.as_double()) {
+                    if let Some(value) = self.reader.read_pair()?.and_then(|pair| pair.as_double())
+                    {
                         let state = hdr.legacy.get_or_insert_with(Default::default);
                         match var_name.as_str() {
                             "$VIEWSIZE" => state.view_height = value,
@@ -2133,6 +2137,18 @@ impl<'a> SectionReader<'a> {
                     if let Some(p) = self.reader.read_pair()? {
                         if let Some(v) = p.as_double() {
                             hdr.dim_fixed_ext_line_length = v;
+                        }
+                    }
+                }
+                "$DIMFXLON" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_fixed_ext_line_on = p.as_i16() == Some(1);
+                    }
+                }
+                "$DIMARCSYM" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_i16() {
+                            hdr.dim_arc_symbol = v;
                         }
                     }
                 }
@@ -3321,19 +3337,19 @@ impl<'a> SectionReader<'a> {
             // Tables start with code 0 = "TABLE"
             if pair.code == 0 && pair.value_string == "TABLE" {
                 let result: Result<()> = (|| {
-                // Read table name (code 2)
-                if let Some(name_pair) = self.reader.read_pair()? {
-                    if name_pair.code == 2 {
-                        match name_pair.value_string.as_str() {
-                            "LAYER" => self.read_layer_table(document)?,
-                            "LTYPE" => self.read_linetype_table(document)?,
-                            "STYLE" => self.read_textstyle_table(document)?,
-                            "BLOCK_RECORD" => self.read_block_record_table(document)?,
-                            "DIMSTYLE" => self.read_dimstyle_table(document)?,
-                            "APPID" => self.read_appid_table(document)?,
-                            "VIEW" => self.read_view_table(document)?,
-                            "VPORT" => self.read_vport_table(document)?,
-                            "UCS" => self.read_ucs_table(document)?,
+                    // Read table name (code 2)
+                    if let Some(name_pair) = self.reader.read_pair()? {
+                        if name_pair.code == 2 {
+                            match name_pair.value_string.as_str() {
+                                "LAYER" => self.read_layer_table(document)?,
+                                "LTYPE" => self.read_linetype_table(document)?,
+                                "STYLE" => self.read_textstyle_table(document)?,
+                                "BLOCK_RECORD" => self.read_block_record_table(document)?,
+                                "DIMSTYLE" => self.read_dimstyle_table(document)?,
+                                "APPID" => self.read_appid_table(document)?,
+                                "VIEW" => self.read_view_table(document)?,
+                                "VPORT" => self.read_vport_table(document)?,
+                                "UCS" => self.read_ucs_table(document)?,
                                 _ => self.skip_to_endtab()?,
                             }
                         }
@@ -3365,8 +3381,8 @@ impl<'a> SectionReader<'a> {
             if pair.code == 0 && pair.value_string == "BLOCK" {
                 match self.read_block(document) {
                     Ok(true) => {
-                    self.decoded_records = self.decoded_records.saturating_add(1);
-                }
+                        self.decoded_records = self.decoded_records.saturating_add(1);
+                    }
                     Ok(false) => {}
                     Err(error) if self.failsafe => {
                         self.recover_record(error)?;
@@ -3389,8 +3405,7 @@ impl<'a> SectionReader<'a> {
         let mut base_point = Vector3::new(0.0, 0.0, 0.0);
         let mut description = String::new();
         let mut xref_path = String::new();
-        let mut layer = String::from("0");
-        let mut handle = Handle::NULL;
+        let mut common = EntityCommon::default();
         // BLOCK entity code 70 = the authoritative block-type flags
         // (1=anonymous, 2=has-attributes, 4=xref, 8=xref-overlay).
         let mut block_flags: i16 = 0;
@@ -3399,6 +3414,9 @@ impl<'a> SectionReader<'a> {
 
         // Read BLOCK entity properties
         while let Some(pair) = self.reader.read_pair()? {
+            if self.try_read_common_entity_code(&pair, &mut common)? {
+                continue;
+            }
             match pair.code {
                 0 => {
                     // Start of next entity - put it back and break
@@ -3420,16 +3438,6 @@ impl<'a> SectionReader<'a> {
                 1 => {
                     // XRef path
                     xref_path = pair.value_string.clone();
-                }
-                5 => {
-                    // Handle
-                    if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                        handle = Handle::new(h);
-                    }
-                }
-                8 => {
-                    // Layer
-                    layer = pair.value_string.clone();
                 }
                 10 | 20 | 30 => {
                     // Base point coordinates
@@ -3475,8 +3483,7 @@ impl<'a> SectionReader<'a> {
 
         // Create Block entity
         let mut block = Block::new(block_name.clone(), base_point);
-        block.common.handle = handle;
-        block.common.layer = layer.clone();
+        block.common = common;
         block.description = description;
         block.xref_path = xref_path;
 
@@ -3516,12 +3523,16 @@ impl<'a> SectionReader<'a> {
                             document.block_records.add_or_replace(br);
                         }
 
+                        if block.common.handle.is_null() {
+                            block.common.handle = document.allocate_handle();
+                        }
+
                         if let Some(block_record) = document.block_records.get_mut(&block_name) {
                             block_record.entity_handles = entity_handles;
                             block_record.xref_path = block.xref_path.clone();
                             block_record.base_point = block.base_point;
-                            // The BLOCK marker is not kept in the entity list,
-                            // so its description only survives on the record.
+                            // The BLOCK marker's description is also stored here
+                            // because the record is authoritative for block output.
                             block_record.description = block.description.clone();
                             // Block-type flags come from the BLOCK entity's
                             // code 70 (the BLOCK_RECORD's code 70 is units).
@@ -3533,13 +3544,17 @@ impl<'a> SectionReader<'a> {
                             // identities. Keep missing source handles null so
                             // the post-read pass can assign fresh handles after
                             // it has seen every identity in the file.
-                            block_record.block_entity_handle = handle;
+                            block_record.block_entity_handle = block.common.handle;
                             block_record.block_end_handle = block_end.common.handle;
+                            block.common.owner_handle = block_record.handle;
                         }
 
-                        // Note: Block and BlockEnd are block definition markers, not drawing entities.
-                        // They are not added to the document's main entity list.
-                        // The block content is stored in the BlockRecord.
+                        // Keep the structural marker in the entity store so its common
+                        // data (including XDATA) is available to both format writers.
+                        document.add_loaded_entity(EntityType::Block(block));
+
+                        // Block and BlockEnd remain structural markers, excluded
+                        // from normal entity iteration and block membership.
 
                         committed = true;
                         break;
@@ -3788,9 +3803,7 @@ impl<'a> SectionReader<'a> {
                         self.skip_entity()?;
                     }
                     _ => {
-                        // Read as unknown entity in block — common fields preserved
-                        let entity = self.read_unknown_entity(&pair.value_string)?;
-                        block_entities.push(EntityType::Unknown(entity));
+                        block_entities.push(self.read_custom_entity(&pair.value_string)?);
                     }
                 }
             }
@@ -3853,285 +3866,285 @@ impl<'a> SectionReader<'a> {
                 let before = document.entities.len();
 
                 let result: Result<()> = (|| {
-                match entity_type.as_str() {
-                    "POINT" => {
-                        if let Some(entity) = self.read_point()? {
-                            let _ = document.add_entity(EntityType::Point(entity));
+                    match entity_type.as_str() {
+                        "POINT" => {
+                            if let Some(entity) = self.read_point()? {
+                                let _ = document.add_entity(EntityType::Point(entity));
+                            }
                         }
-                    }
-                    "LINE" | "3DLINE" => {
-                        if let Some(entity) = self.read_line()? {
-                            let _ = document.add_entity(EntityType::Line(entity));
+                        "LINE" | "3DLINE" => {
+                            if let Some(entity) = self.read_line()? {
+                                let _ = document.add_entity(EntityType::Line(entity));
+                            }
                         }
-                    }
-                    "CIRCLE" => {
-                        if let Some(entity) = self.read_circle()? {
-                            let _ = document.add_entity(EntityType::Circle(entity));
+                        "CIRCLE" => {
+                            if let Some(entity) = self.read_circle()? {
+                                let _ = document.add_entity(EntityType::Circle(entity));
+                            }
                         }
-                    }
-                    "ARC" => {
-                        if let Some(entity) = self.read_arc()? {
-                            let _ = document.add_entity(EntityType::Arc(entity));
+                        "ARC" => {
+                            if let Some(entity) = self.read_arc()? {
+                                let _ = document.add_entity(EntityType::Arc(entity));
+                            }
                         }
-                    }
-                    "ELLIPSE" => {
-                        if let Some(entity) = self.read_ellipse()? {
-                            let _ = document.add_entity(EntityType::Ellipse(entity));
+                        "ELLIPSE" => {
+                            if let Some(entity) = self.read_ellipse()? {
+                                let _ = document.add_entity(EntityType::Ellipse(entity));
+                            }
                         }
-                    }
-                    "POLYLINE" => {
-                        if let Some(entity) = self.read_polyline_entity()? {
-                            let _ = document.add_entity(entity);
+                        "POLYLINE" => {
+                            if let Some(entity) = self.read_polyline_entity()? {
+                                let _ = document.add_entity(entity);
+                            }
                         }
-                    }
-                    "LWPOLYLINE" => {
-                        if let Some(entity) = self.read_lwpolyline()? {
-                            let _ = document.add_entity(EntityType::LwPolyline(entity));
+                        "LWPOLYLINE" => {
+                            if let Some(entity) = self.read_lwpolyline()? {
+                                let _ = document.add_entity(EntityType::LwPolyline(entity));
+                            }
                         }
-                    }
-                    "TEXT" => {
-                        if let Some(entity) = self.read_text()? {
-                            let _ = document.add_entity(EntityType::Text(entity));
+                        "TEXT" => {
+                            if let Some(entity) = self.read_text()? {
+                                let _ = document.add_entity(EntityType::Text(entity));
+                            }
                         }
-                    }
-                    "MTEXT" => {
-                        if let Some(entity) = self.read_mtext()? {
-                            let _ = document.add_entity(EntityType::MText(Box::new(entity)));
+                        "MTEXT" => {
+                            if let Some(entity) = self.read_mtext()? {
+                                let _ = document.add_entity(EntityType::MText(Box::new(entity)));
+                            }
                         }
-                    }
-                    "SPLINE" => {
-                        if let Some(entity) = self.read_spline()? {
-                            let _ = document.add_entity(EntityType::Spline(entity));
+                        "SPLINE" => {
+                            if let Some(entity) = self.read_spline()? {
+                                let _ = document.add_entity(EntityType::Spline(entity));
+                            }
                         }
-                    }
-                    "HELIX" => {
-                        if let Some(entity) = self.read_helix()? {
-                            let _ = document.add_entity(EntityType::Helix(Box::new(entity)));
+                        "HELIX" => {
+                            if let Some(entity) = self.read_helix()? {
+                                let _ = document.add_entity(EntityType::Helix(Box::new(entity)));
+                            }
                         }
-                    }
-                    "DIMENSION" => {
-                        if let Some(entity) = self.read_dimension()? {
+                        "DIMENSION" => {
+                            if let Some(entity) = self.read_dimension()? {
                                 let _ =
                                     document.add_entity(EntityType::Dimension(Box::new(entity)));
+                            }
                         }
-                    }
-                    "ARC_DIMENSION" | "LARGE_RADIAL_DIMENSION" => {
-                        if let Some(entity) = self.read_extended_dimension(&entity_type)? {
+                        "ARC_DIMENSION" | "LARGE_RADIAL_DIMENSION" => {
+                            if let Some(entity) = self.read_extended_dimension(&entity_type)? {
                                 let _ =
                                     document.add_entity(EntityType::Dimension(Box::new(entity)));
+                            }
                         }
-                    }
-                    "HATCH" => {
-                        if let Some(entity) = self.read_hatch()? {
-                            let _ = document.add_entity(EntityType::Hatch(Box::new(entity)));
+                        "HATCH" => {
+                            if let Some(entity) = self.read_hatch()? {
+                                let _ = document.add_entity(EntityType::Hatch(Box::new(entity)));
+                            }
                         }
-                    }
-                    "MPOLYGON" => {
-                        if let Some(entity) = self.read_mpolygon()? {
-                            let _ = document.add_entity(EntityType::Hatch(Box::new(entity)));
+                        "MPOLYGON" => {
+                            if let Some(entity) = self.read_mpolygon()? {
+                                let _ = document.add_entity(EntityType::Hatch(Box::new(entity)));
+                            }
                         }
-                    }
-                    "SOLID" => {
-                        if let Some(entity) = self.read_solid()? {
-                            let _ = document.add_entity(EntityType::Solid(entity));
+                        "SOLID" => {
+                            if let Some(entity) = self.read_solid()? {
+                                let _ = document.add_entity(EntityType::Solid(entity));
+                            }
                         }
-                    }
-                    "TRACE" => {
-                        if let Some(mut entity) = self.read_solid()? {
-                            entity.is_trace = true;
-                            let _ = document.add_entity(EntityType::Solid(entity));
+                        "TRACE" => {
+                            if let Some(mut entity) = self.read_solid()? {
+                                entity.is_trace = true;
+                                let _ = document.add_entity(EntityType::Solid(entity));
+                            }
                         }
-                    }
-                    "3DFACE" => {
-                        if let Some(entity) = self.read_face3d()? {
-                            let _ = document.add_entity(EntityType::Face3D(entity));
+                        "3DFACE" => {
+                            if let Some(entity) = self.read_face3d()? {
+                                let _ = document.add_entity(EntityType::Face3D(entity));
+                            }
                         }
-                    }
-                    "INSERT" | "ACDBVIEWREPBLOCKREFERENCE" | "ACIDBLOCKREFERENCE" => {
-                        if let Some(entity) = self.read_insert()? {
-                            let _ = document.add_entity(EntityType::Insert(entity));
+                        "INSERT" | "ACDBVIEWREPBLOCKREFERENCE" | "ACIDBLOCKREFERENCE" => {
+                            if let Some(entity) = self.read_insert()? {
+                                let _ = document.add_entity(EntityType::Insert(entity));
+                            }
                         }
-                    }
-                    "RAY" => {
-                        if let Some(entity) = self.read_ray()? {
-                            let _ = document.add_entity(EntityType::Ray(entity));
+                        "RAY" => {
+                            if let Some(entity) = self.read_ray()? {
+                                let _ = document.add_entity(EntityType::Ray(entity));
+                            }
                         }
-                    }
-                    "XLINE" => {
-                        if let Some(entity) = self.read_xline()? {
-                            let _ = document.add_entity(EntityType::XLine(entity));
+                        "XLINE" => {
+                            if let Some(entity) = self.read_xline()? {
+                                let _ = document.add_entity(EntityType::XLine(entity));
+                            }
                         }
-                    }
-                    "ATTDEF" => {
-                        if let Some(entity) = self.read_attdef()? {
+                        "ATTDEF" => {
+                            if let Some(entity) = self.read_attdef()? {
                                 let _ =
                                     document.add_entity(EntityType::AttributeDefinition(entity));
+                            }
                         }
-                    }
-                    "TOLERANCE" => {
-                        if let Some(entity) = self.read_tolerance()? {
-                            let _ = document.add_entity(EntityType::Tolerance(entity));
+                        "TOLERANCE" => {
+                            if let Some(entity) = self.read_tolerance()? {
+                                let _ = document.add_entity(EntityType::Tolerance(entity));
+                            }
                         }
-                    }
-                    "SHAPE" => {
-                        if let Some(entity) = self.read_shape()? {
-                            let _ = document.add_entity(EntityType::Shape(entity));
+                        "SHAPE" => {
+                            if let Some(entity) = self.read_shape()? {
+                                let _ = document.add_entity(EntityType::Shape(entity));
+                            }
                         }
-                    }
-                    "WIPEOUT" => {
-                        if let Some(entity) = self.read_wipeout()? {
-                            let _ = document.add_entity(EntityType::Wipeout(entity));
+                        "WIPEOUT" => {
+                            if let Some(entity) = self.read_wipeout()? {
+                                let _ = document.add_entity(EntityType::Wipeout(entity));
+                            }
                         }
-                    }
-                    "VIEWPORT" => {
-                        if let Some(entity) = self.read_viewport()? {
-                            let _ = document.add_entity(EntityType::Viewport(Box::new(entity)));
+                        "VIEWPORT" => {
+                            if let Some(entity) = self.read_viewport()? {
+                                let _ = document.add_entity(EntityType::Viewport(Box::new(entity)));
+                            }
                         }
-                    }
-                    "ATTRIB" => {
-                        if let Some(entity) = self.read_attrib()? {
-                            let _ = document.add_entity(EntityType::AttributeEntity(entity));
+                        "ATTRIB" => {
+                            if let Some(entity) = self.read_attrib()? {
+                                let _ = document.add_entity(EntityType::AttributeEntity(entity));
+                            }
                         }
-                    }
-                    "LEADER" => {
-                        if let Some(entity) = self.read_leader()? {
-                            let _ = document.add_entity(EntityType::Leader(entity));
+                        "LEADER" => {
+                            if let Some(entity) = self.read_leader()? {
+                                let _ = document.add_entity(EntityType::Leader(entity));
+                            }
                         }
-                    }
-                    "MULTILEADER" | "MLEADER" => {
-                        if let Some(entity) = self.read_multileader()? {
+                        "MULTILEADER" | "MLEADER" => {
+                            if let Some(entity) = self.read_multileader()? {
                                 let _ =
                                     document.add_entity(EntityType::MultiLeader(Box::new(entity)));
+                            }
                         }
-                    }
-                    "MLINE" => {
-                        if let Some(entity) = self.read_mline()? {
-                            let _ = document.add_entity(EntityType::MLine(entity));
+                        "MLINE" => {
+                            if let Some(entity) = self.read_mline()? {
+                                let _ = document.add_entity(EntityType::MLine(entity));
+                            }
                         }
-                    }
-                    "MESH" => {
-                        if let Some(entity) = self.read_mesh()? {
-                            let _ = document.add_entity(EntityType::Mesh(entity));
+                        "MESH" => {
+                            if let Some(entity) = self.read_mesh()? {
+                                let _ = document.add_entity(EntityType::Mesh(entity));
+                            }
                         }
-                    }
-                    "IMAGE" => {
-                        if let Some(entity) = self.read_raster_image()? {
-                            let _ = document.add_entity(EntityType::RasterImage(entity));
+                        "IMAGE" => {
+                            if let Some(entity) = self.read_raster_image()? {
+                                let _ = document.add_entity(EntityType::RasterImage(entity));
+                            }
                         }
-                    }
-                    "3DSOLID" => {
-                        if let Some(entity) = self.read_solid3d()? {
-                            let _ = document.add_entity(EntityType::Solid3D(entity));
+                        "3DSOLID" => {
+                            if let Some(entity) = self.read_solid3d()? {
+                                let _ = document.add_entity(EntityType::Solid3D(entity));
+                            }
                         }
-                    }
-                    "REGION" => {
-                        if let Some(entity) = self.read_region()? {
-                            let _ = document.add_entity(EntityType::Region(entity));
+                        "REGION" => {
+                            if let Some(entity) = self.read_region()? {
+                                let _ = document.add_entity(EntityType::Region(entity));
+                            }
                         }
-                    }
-                    "BODY" => {
-                        if let Some(entity) = self.read_body()? {
-                            let _ = document.add_entity(EntityType::Body(entity));
+                        "BODY" => {
+                            if let Some(entity) = self.read_body()? {
+                                let _ = document.add_entity(EntityType::Body(entity));
+                            }
                         }
-                    }
-                    "LIGHT" => {
-                        if let Some(entity) = self.read_light_entity()? {
-                            let _ = document.add_entity(EntityType::Light(Box::new(entity)));
+                        "LIGHT" => {
+                            if let Some(entity) = self.read_light_entity()? {
+                                let _ = document.add_entity(EntityType::Light(Box::new(entity)));
+                            }
                         }
-                    }
-                    "SURFACE" | "PLANESURFACE" | "EXTRUDEDSURFACE" | "LOFTEDSURFACE"
-                    | "REVOLVEDSURFACE" | "SWEPTSURFACE" | "NURBSURFACE" => {
-                        if let Some(entity) =
-                            self.read_surface_entity(&entity_type, document.version)?
-                        {
-                            let _ = document.add_entity(EntityType::Surface(Box::new(entity)));
+                        "SURFACE" | "PLANESURFACE" | "EXTRUDEDSURFACE" | "LOFTEDSURFACE"
+                        | "REVOLVEDSURFACE" | "SWEPTSURFACE" | "NURBSURFACE" => {
+                            if let Some(entity) =
+                                self.read_surface_entity(&entity_type, document.version)?
+                            {
+                                let _ = document.add_entity(EntityType::Surface(Box::new(entity)));
+                            }
                         }
-                    }
-                    "ACAD_TABLE" | "TABLE" => {
-                        if let Some(entity) = self.read_table_entity()? {
-                            let _ = document.add_entity(EntityType::Table(Box::new(entity)));
+                        "ACAD_TABLE" | "TABLE" => {
+                            if let Some(entity) = self.read_table_entity()? {
+                                let _ = document.add_entity(EntityType::Table(Box::new(entity)));
+                            }
                         }
-                    }
-                    "PDFUNDERLAY" | "DWFUNDERLAY" | "DGNUNDERLAY" => {
-                        if let Some(entity) = self.read_underlay(&entity_type)? {
-                            let _ = document.add_entity(EntityType::Underlay(entity));
+                        "PDFUNDERLAY" | "DWFUNDERLAY" | "DGNUNDERLAY" => {
+                            if let Some(entity) = self.read_underlay(&entity_type)? {
+                                let _ = document.add_entity(EntityType::Underlay(entity));
+                            }
                         }
-                    }
-                    "SECTIONLINE" => {
-                        let entity = self.read_section_symbol_dxf()?;
-                        let _ = document.add_entity(EntityType::SectionSymbol(entity));
-                    }
-                    "DRAWINGVIEW" => {
-                        let entity = self.read_view_border_dxf()?;
-                        let _ = document.add_entity(EntityType::ViewBorder(entity));
-                    }
-                    "OLE2FRAME" => {
-                        if let Some(entity) = self.read_ole2frame()? {
+                        "SECTIONLINE" => {
+                            let entity = self.read_section_symbol_dxf()?;
+                            let _ = document.add_entity(EntityType::SectionSymbol(entity));
+                        }
+                        "DRAWINGVIEW" => {
+                            let entity = self.read_view_border_dxf()?;
+                            let _ = document.add_entity(EntityType::ViewBorder(entity));
+                        }
+                        "OLE2FRAME" => {
+                            if let Some(entity) = self.read_ole2frame()? {
                                 let _ =
                                     document.add_entity(EntityType::Ole2Frame(Box::new(entity)));
+                            }
                         }
-                    }
-                    "CAMERA"
-                    | "SECTIONOBJECT"
-                    | "ARCALIGNEDTEXT"
-                    | "RTEXT"
-                    | "POSITIONMARKER"
-                    | "GEOPOSITIONMARKER"
-                    | "COORDINATION_MODEL"
-                    | "NAVISWORKSMODEL"
-                    | "ACDBPOINTCLOUD"
-                    | "POINTCLOUD"
-                    | "ACDBPOINTCLOUDEX"
-                    | "POINTCLOUDEX"
-                    | "ACAD_PROXY_ENTITY"
-                    | "OLEFRAME"
-                    | "LAYOUTPRINTCONFIG"
-                    | "FORMAT"
-                    | "Format"
-                    | "REPEAT"
-                    | "ENDREP"
-                    | "LOAD"
-                    | "JUMP"
-                    | "ALIGNMENTPARAMETERENTITY"
-                    | "BASEPOINTPARAMETERENTITY"
-                    | "FLIPPARAMETERENTITY"
-                    | "LINEARPARAMETERENTITY"
-                    | "POINTPARAMETERENTITY"
-                    | "ROTATIONPARAMETERENTITY"
-                    | "VISIBILITYPARAMETERENTITY"
-                    | "FLIPGRIPENTITY"
-                    | "LINEARGRIPENTITY"
-                    | "POLARGRIPENTITY"
-                    | "ROTATIONGRIPENTITY"
-                    | "VISIBILITYGRIPENTITY"
-                    | "XYGRIPENTITY"
-                    | "BLOCKANGULARCONSTRAINTPARAMETERENTITY"
-                    | "XYPARAMETERENTITY" => {
-                        if let Some(entity) = self.read_extended_entity(&entity_type)? {
+                        "CAMERA"
+                        | "SECTIONOBJECT"
+                        | "ARCALIGNEDTEXT"
+                        | "RTEXT"
+                        | "POSITIONMARKER"
+                        | "GEOPOSITIONMARKER"
+                        | "COORDINATION_MODEL"
+                        | "NAVISWORKSMODEL"
+                        | "ACDBPOINTCLOUD"
+                        | "POINTCLOUD"
+                        | "ACDBPOINTCLOUDEX"
+                        | "POINTCLOUDEX"
+                        | "ACAD_PROXY_ENTITY"
+                        | "OLEFRAME"
+                        | "LAYOUTPRINTCONFIG"
+                        | "FORMAT"
+                        | "Format"
+                        | "REPEAT"
+                        | "ENDREP"
+                        | "LOAD"
+                        | "JUMP"
+                        | "ALIGNMENTPARAMETERENTITY"
+                        | "BASEPOINTPARAMETERENTITY"
+                        | "FLIPPARAMETERENTITY"
+                        | "LINEARPARAMETERENTITY"
+                        | "POINTPARAMETERENTITY"
+                        | "ROTATIONPARAMETERENTITY"
+                        | "VISIBILITYPARAMETERENTITY"
+                        | "FLIPGRIPENTITY"
+                        | "LINEARGRIPENTITY"
+                        | "POLARGRIPENTITY"
+                        | "ROTATIONGRIPENTITY"
+                        | "VISIBILITYGRIPENTITY"
+                        | "XYGRIPENTITY"
+                        | "BLOCKANGULARCONSTRAINTPARAMETERENTITY"
+                        | "XYPARAMETERENTITY" => {
+                            if let Some(entity) = self.read_extended_entity(&entity_type)? {
+                                let _ = document.add_entity(EntityType::Extended(Box::new(entity)));
+                            }
+                        }
+                        name if is_registered_class_entity_name(name) => {
+                            let entity = self.read_registered_class_entity(name)?;
                             let _ = document.add_entity(EntityType::Extended(Box::new(entity)));
                         }
+                        "SEQEND" => {
+                            // Standalone SEQEND — skip (normally consumed by polyline/insert reader)
+                            self.skip_entity()?;
+                        }
+                        _ => {
+                            if !crate::classes::arch::is_architecture_name(&entity_type) {
+                                document.notifications.notify(
+                                    crate::notification::NotificationType::NotImplemented,
+                                    format!(
+                                        "Entity not supported, read as UnknownEntity: {}",
+                                        entity_type
+                                    ),
+                                );
+                            }
+                            let _ = document.add_entity(self.read_custom_entity(&entity_type)?);
+                        }
                     }
-                    name if is_registered_class_entity_name(name) => {
-                        let entity = self.read_registered_class_entity(name)?;
-                        let _ = document.add_entity(EntityType::Extended(Box::new(entity)));
-                    }
-                    "SEQEND" => {
-                        // Standalone SEQEND — skip (normally consumed by polyline/insert reader)
-                        self.skip_entity()?;
-                    }
-                    _ => {
-                        // Read as unknown entity — common fields preserved, entity-specific codes discarded
-                        document.notifications.notify(
-                            crate::notification::NotificationType::NotImplemented,
-                            format!(
-                                "Entity not supported, read as UnknownEntity: {}",
-                                entity_type
-                            ),
-                        );
-                        let entity = self.read_unknown_entity(&entity_type)?;
-                        let _ = document.add_entity(EntityType::Unknown(entity));
-                    }
-                }
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -4528,7 +4541,7 @@ impl<'a> SectionReader<'a> {
             }
             "BLOCKALIGNMENTGRIP" => DynamicBlockData::AlignmentGrip(BlockOrientedGrip {
                 grip: dynamic_dxf_grip(&fields),
-                orientation: fields.point("AcDbBlockAlignmentGrip", 140),
+                orientation: fields.vector_140("AcDbBlockAlignmentGrip"),
             }),
             "BLOCKFLIPGRIP" => DynamicBlockData::FlipGrip(BlockFlipGrip {
                 grip: dynamic_dxf_grip(&fields),
@@ -5193,7 +5206,7 @@ impl<'a> SectionReader<'a> {
                 }
             }
             "ACDB_MTEXTOBJECTCONTEXTDATA_CLASS" => {
-                // AutoCAD: no subclass marker, fields follow the annotation
+                // ACAD: no subclass marker, fields follow the annotation
                 // scale groups, 10 = x-axis direction, 11 = insertion point.
                 // Older acadrust output: an AcDbMTextObjectContextData marker
                 // with the two points the other way round.
@@ -5371,6 +5384,7 @@ impl<'a> SectionReader<'a> {
                         xdictionary_handle: None,
                         has_binary_data: false,
                         class_version: context_class_version,
+                        has_file_to_extension_dictionary: true,
                         is_default: context_is_default,
                         scale: context_scale,
                         mtext: MTextContext {
@@ -5445,6 +5459,10 @@ impl<'a> SectionReader<'a> {
             reactors,
             xdictionary_handle,
             class_version,
+            // DXF does not expose the R2010+ DWG file-to-extension flag.
+            // ODA §20.4.89 documents true as its default.
+            has_file_to_extension_dictionary: true,
+            uses_legacy_mleader_context_base: false,
             is_default,
             scale,
             kind,
@@ -5654,10 +5672,10 @@ impl<'a> SectionReader<'a> {
                 })
             }
             "RENDERSETTINGS" => ClassObjectData::RenderSettings(class_dxf_render_settings(
-                    &mut fields,
-                    version >= DxfVersion::AC1027,
-                    false,
-                    version,
+                &mut fields,
+                version >= DxfVersion::AC1027,
+                false,
+                version,
             )),
             "MENTALRAYRENDERSETTINGS" => {
                 let base = class_dxf_render_settings(&mut fields, false, false, version);
@@ -6678,351 +6696,356 @@ impl<'a> SectionReader<'a> {
                 let before = document.objects.len();
                 self.reader.record_xdata(true);
                 let result: Result<()> = (|| {
-                match pair.value_string.as_str() {
-                    "DICTIONARY" => {
-                        if let Some(obj) = self.read_dictionary()? {
+                    match pair.value_string.as_str() {
+                        "DICTIONARY" => {
+                            if let Some(obj) = self.read_dictionary()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::Dictionary(obj));
+                            }
+                        }
+                        "LAYOUT" => {
+                            if let Some(obj) = self.read_layout()? {
+                                document.objects.insert(obj.handle, ObjectType::Layout(obj));
+                            }
+                        }
+                        "XRECORD" => {
+                            if let Some(obj) = self.read_xrecord()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::XRecord(obj));
+                            }
+                        }
+                        "GROUP" => {
+                            if let Some(obj) = self.read_group()? {
+                                document.objects.insert(obj.handle, ObjectType::Group(obj));
+                            }
+                        }
+                        "MLINESTYLE" => {
+                            if let Some(obj) = self.read_mlinestyle_object()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::MLineStyle(obj));
+                            }
+                        }
+                        "IMAGEDEF" => {
+                            if let Some(obj) = self.read_image_definition()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::ImageDefinition(obj));
+                            }
+                        }
+                        "PDFDEFINITION" | "DWFDEFINITION" | "DGNDEFINITION" => {
+                            use crate::entities::underlay::UnderlayType;
+                            let utype = match pair.value_string.as_str() {
+                                "DWFDEFINITION" => UnderlayType::Dwf,
+                                "DGNDEFINITION" => UnderlayType::Dgn,
+                                _ => UnderlayType::Pdf,
+                            };
+                            if let Some(obj) = self.read_underlay_definition(utype)? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::UnderlayDefinition(obj));
+                            }
+                        }
+                        "MLEADERSTYLE" => {
+                            if let Some(obj) = self.read_multileader_style()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::MultiLeaderStyle(obj));
+                            }
+                        }
+                        "PLOTSETTINGS" => {
+                            if let Some(obj) = self.read_plot_settings()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::PlotSettings(obj));
+                            }
+                        }
+                        "TABLESTYLE" => {
+                            if let Some(obj) = self.read_table_style()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::TableStyle(obj));
+                            }
+                        }
+                        "TABLECONTENT" => {
+                            if let Some(obj) = self.read_table_content_object_typed_dxf()? {
+                                document
+                                    .objects
+                                    .insert(obj.common.handle, ObjectType::TableContent(obj));
+                            }
+                        }
+                        "SCALE" => {
+                            if let Some(obj) = self.read_scale()? {
+                                document.objects.insert(obj.handle, ObjectType::Scale(obj));
+                            }
+                        }
+                        "SORTENTSTABLE" => {
+                            if let Some(obj) = self.read_sort_entities_table(document.version)? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::SortEntitiesTable(obj));
+                            }
+                        }
+                        "DICTIONARYVAR" => {
+                            if let Some(obj) = self.read_dictionary_variable()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::DictionaryVariable(obj));
+                            }
+                        }
+                        "VISUALSTYLE" => {
+                            if let Some(obj) = self.read_visualstyle()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::VisualStyle(obj));
+                            }
+                        }
+                        "MATERIAL" => {
+                            if let Some(obj) = self.read_material()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::Material(obj));
+                            }
+                        }
+                        "IMAGEDEF_REACTOR" => {
+                            if let Some(obj) = self.read_imagedef_reactor()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::ImageDefinitionReactor(obj));
+                            }
+                        }
+                        "GEODATA" => {
+                            let obj = self.read_geodata()?;
                             document
                                 .objects
-                                .insert(obj.handle, ObjectType::Dictionary(obj));
+                                .insert(obj.handle, ObjectType::GeoData(obj));
                         }
-                    }
-                    "LAYOUT" => {
-                        if let Some(obj) = self.read_layout()? {
-                            document.objects.insert(obj.handle, ObjectType::Layout(obj));
-                        }
-                    }
-                    "XRECORD" => {
-                        if let Some(obj) = self.read_xrecord()? {
+                        "BREAKDATA"
+                        | "BREAKPOINTREF"
+                        | "IDBUFFER"
+                        | "INDEX"
+                        | "LAYER_INDEX"
+                        | "PARTIAL_VIEWING_FILTER"
+                        | "CELLSTYLEMAP"
+                        | "TABLEGEOMETRY"
+                        | "LONG_TRANSACTION"
+                        | "ACDSRECORD"
+                        | "ACDSSCHEMA"
+                        | "DUMMY"
+                        | "OBJECT_PTR" => {
+                            let obj = self.read_data_object_dxf(&pair.value_string)?;
                             document
                                 .objects
-                                .insert(obj.handle, ObjectType::XRecord(obj));
+                                .insert(obj.handle, ObjectType::DataObject(obj));
                         }
-                    }
-                    "GROUP" => {
-                        if let Some(obj) = self.read_group()? {
-                            document.objects.insert(obj.handle, ObjectType::Group(obj));
+                        // ACAD emits the record name with an underscore; accept
+                        // both spellings so the INSERT xclip chain resolves.
+                        "SPATIAL_FILTER" | "SPATIALFILTER" => {
+                            if let Some(obj) = self.read_spatial_filter()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::SpatialFilter(obj));
+                            }
                         }
-                    }
-                    "MLINESTYLE" => {
-                        if let Some(obj) = self.read_mlinestyle_object()? {
+                        "RASTERVARIABLES" => {
+                            if let Some(obj) = self.read_raster_variables()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::RasterVariables(obj));
+                            }
+                        }
+                        "DBCOLOR" => {
+                            if let Some(obj) = self.read_bookcolor()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::BookColor(obj));
+                            }
+                        }
+                        "ACDBPLACEHOLDER" => {
+                            let obj = self.read_stub_object::<PlaceHolder>()?;
                             document
                                 .objects
-                                .insert(obj.handle, ObjectType::MLineStyle(obj));
+                                .insert(obj.handle, ObjectType::PlaceHolder(obj));
                         }
-                    }
-                    "IMAGEDEF" => {
-                        if let Some(obj) = self.read_image_definition()? {
+                        "ACDBDICTIONARYWDFLT" => {
+                            // Already handled as DICTIONARY above — this handles standalone cases
+                            if let Some(obj) = self.read_dict_with_default()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::DictionaryWithDefault(obj));
+                            }
+                        }
+                        "WIPEOUTVARIABLES" => {
+                            if let Some(obj) = self.read_wipeout_variables()? {
+                                document
+                                    .objects
+                                    .insert(obj.handle, ObjectType::WipeoutVariables(obj));
+                            }
+                        }
+                        "FIELD" | "ACDBFIELD" => {
+                            let obj = self.read_field_object_dxf(document.version)?;
+                            document.fields.insert(
+                                obj.handle,
+                                crate::document::FieldDef {
+                                    handle: obj.handle,
+                                    owner: obj.owner,
+                                    evaluator: obj.evaluator_id.clone(),
+                                    code: obj.code.clone(),
+                                    objects: obj.referenced_objects.clone(),
+                                },
+                            );
+                            document.objects.insert(obj.handle, ObjectType::Field(obj));
+                        }
+                        "FIELDLIST" | "ACDBFIELDLIST" => {
+                            let obj = self.read_field_list_dxf()?;
                             document
                                 .objects
-                                .insert(obj.handle, ObjectType::ImageDefinition(obj));
+                                .insert(obj.handle, ObjectType::FieldList(obj));
                         }
-                    }
-                    "PDFDEFINITION" | "DWFDEFINITION" | "DGNDEFINITION" => {
-                        use crate::entities::underlay::UnderlayType;
-                        let utype = match pair.value_string.as_str() {
-                            "DWFDEFINITION" => UnderlayType::Dwf,
-                            "DGNDEFINITION" => UnderlayType::Dgn,
-                            _ => UnderlayType::Pdf,
-                        };
-                        if let Some(obj) = self.read_underlay_definition(utype)? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::UnderlayDefinition(obj));
-                        }
-                    }
-                    "MLEADERSTYLE" => {
-                        if let Some(obj) = self.read_multileader_style()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::MultiLeaderStyle(obj));
-                        }
-                    }
-                    "PLOTSETTINGS" => {
-                        if let Some(obj) = self.read_plot_settings()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::PlotSettings(obj));
-                        }
-                    }
-                    "TABLESTYLE" => {
-                        if let Some(obj) = self.read_table_style()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::TableStyle(obj));
-                        }
-                    }
-                    "TABLECONTENT" => {
-                        if let Some(obj) = self.read_table_content_object_typed_dxf()? {
-                            document
-                                .objects
-                                .insert(obj.common.handle, ObjectType::TableContent(obj));
-                        }
-                    }
-                    "SCALE" => {
-                        if let Some(obj) = self.read_scale()? {
-                            document.objects.insert(obj.handle, ObjectType::Scale(obj));
-                        }
-                    }
-                    "SORTENTSTABLE" => {
-                        if let Some(obj) = self.read_sort_entities_table(document.version)? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::SortEntitiesTable(obj));
-                        }
-                    }
-                    "DICTIONARYVAR" => {
-                        if let Some(obj) = self.read_dictionary_variable()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::DictionaryVariable(obj));
-                        }
-                    }
-                    "VISUALSTYLE" => {
-                        if let Some(obj) = self.read_visualstyle()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::VisualStyle(obj));
-                        }
-                    }
-                    "MATERIAL" => {
-                        if let Some(obj) = self.read_material()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::Material(obj));
-                        }
-                    }
-                    "IMAGEDEF_REACTOR" => {
-                        if let Some(obj) = self.read_imagedef_reactor()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::ImageDefinitionReactor(obj));
-                        }
-                    }
-                    "GEODATA" => {
-                        let obj = self.read_geodata()?;
-                        document
-                            .objects
-                            .insert(obj.handle, ObjectType::GeoData(obj));
-                    }
-                    "BREAKDATA"
-                    | "BREAKPOINTREF"
-                    | "IDBUFFER"
-                    | "INDEX"
-                    | "LAYER_INDEX"
-                    | "PARTIAL_VIEWING_FILTER"
-                    | "CELLSTYLEMAP"
-                    | "TABLEGEOMETRY"
-                    | "LONG_TRANSACTION"
-                    | "ACDSRECORD"
-                    | "ACDSSCHEMA"
-                    | "DUMMY"
-                    | "OBJECT_PTR" => {
-                        let obj = self.read_data_object_dxf(&pair.value_string)?;
-                        document
-                            .objects
-                            .insert(obj.handle, ObjectType::DataObject(obj));
-                    }
-                    // AutoCAD emits the record name with an underscore; accept
-                    // both spellings so the INSERT xclip chain resolves.
-                    "SPATIAL_FILTER" | "SPATIALFILTER" => {
-                        if let Some(obj) = self.read_spatial_filter()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::SpatialFilter(obj));
-                        }
-                    }
-                    "RASTERVARIABLES" => {
-                        if let Some(obj) = self.read_raster_variables()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::RasterVariables(obj));
-                        }
-                    }
-                    "DBCOLOR" => {
-                        if let Some(obj) = self.read_bookcolor()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::BookColor(obj));
-                        }
-                    }
-                    "ACDBPLACEHOLDER" => {
-                        let obj = self.read_stub_object::<PlaceHolder>()?;
-                        document
-                            .objects
-                            .insert(obj.handle, ObjectType::PlaceHolder(obj));
-                    }
-                    "ACDBDICTIONARYWDFLT" => {
-                        // Already handled as DICTIONARY above — this handles standalone cases
-                        if let Some(obj) = self.read_dict_with_default()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::DictionaryWithDefault(obj));
-                        }
-                    }
-                    "WIPEOUTVARIABLES" => {
-                        if let Some(obj) = self.read_wipeout_variables()? {
-                            document
-                                .objects
-                                .insert(obj.handle, ObjectType::WipeoutVariables(obj));
-                        }
-                    }
-                    "FIELD" | "ACDBFIELD" => {
-                        let obj = self.read_field_object_dxf(document.version)?;
-                        document.fields.insert(
-                            obj.handle,
-                            crate::document::FieldDef {
-                                handle: obj.handle,
-                                owner: obj.owner,
-                                evaluator: obj.evaluator_id.clone(),
-                                code: obj.code.clone(),
-                                objects: obj.referenced_objects.clone(),
-                            },
-                        );
-                        document.objects.insert(obj.handle, ObjectType::Field(obj));
-                    }
-                    "FIELDLIST" | "ACDBFIELDLIST" => {
-                        let obj = self.read_field_list_dxf()?;
-                        document
-                            .objects
-                            .insert(obj.handle, ObjectType::FieldList(obj));
-                    }
-                    name if is_dynamic_block_object_name(name) => {
+                        name if is_dynamic_block_object_name(name) => {
                             let object =
                                 self.read_dynamic_block_object_dxf(name, document.version)?;
-                        if let DynamicBlockData::VisibilityParameter(parameter) = &object.data {
-                            document
-                                .block_visibility_params
-                                .insert(parameter.handle, parameter.clone());
-                            document.objects.insert(
-                                parameter.handle,
-                                ObjectType::BlockVisibilityParameter(parameter.clone()),
-                            );
-                        } else {
-                            // An evaluated reference names the dynamic block
-                            // it came from, as the DWG reader records it.
-                            if let DynamicBlockData::Representation(data) = &object.data {
-                                if matches!(
-                                    name.to_ascii_uppercase().as_str(),
-                                    "ACDB_BLOCKREPRESENTATION_DATA" | "BLOCKREPRESENTATION"
-                                ) {
-                                    document
-                                        .block_representations
-                                        .insert(object.handle, data.block);
+                            if let DynamicBlockData::VisibilityParameter(parameter) = &object.data {
+                                document
+                                    .block_visibility_params
+                                    .insert(parameter.handle, parameter.clone());
+                                document.objects.insert(
+                                    parameter.handle,
+                                    ObjectType::BlockVisibilityParameter(parameter.clone()),
+                                );
+                            } else {
+                                // An evaluated reference names the dynamic block
+                                // it came from, as the DWG reader records it.
+                                if let DynamicBlockData::Representation(data) = &object.data {
+                                    if matches!(
+                                        name.to_ascii_uppercase().as_str(),
+                                        "ACDB_BLOCKREPRESENTATION_DATA" | "BLOCKREPRESENTATION"
+                                    ) {
+                                        document
+                                            .block_representations
+                                            .insert(object.handle, data.block);
+                                    }
                                 }
+                                document
+                                    .objects
+                                    .insert(object.handle, ObjectType::DynamicBlock(object));
+                            }
+                        }
+                        name if is_object_context_name(name) => {
+                            let object = self.read_object_context_data_dxf(name)?;
+                            if !object.scale.is_null() {
+                                document.context_scales.insert(object.handle, object.scale);
                             }
                             document
                                 .objects
-                                .insert(object.handle, ObjectType::DynamicBlock(object));
+                                .insert(object.handle, ObjectType::ObjectContextData(object));
                         }
-                    }
-                    name if is_object_context_name(name) => {
-                        let object = self.read_object_context_data_dxf(name)?;
-                        if !object.scale.is_null() {
-                            document.context_scales.insert(object.handle, object.scale);
-                        }
-                        document
-                            .objects
-                            .insert(object.handle, ObjectType::ObjectContextData(object));
-                    }
-                    name if is_associative_object_name(name) => {
+                        name if is_associative_object_name(name) => {
                             let object =
                                 self.read_associative_object_dxf(name, document.version)?;
-                        document
-                            .objects
-                            .insert(object.handle, ObjectType::Associative(object));
-                    }
-                    name if is_class_object_name(name) => {
-                        let object = self.read_class_object_dxf(name, document.version)?;
-                        if let ClassObjectData::SectionViewStyle(style) = &object.data {
+                            document
+                                .objects
+                                .insert(object.handle, ObjectType::Associative(object));
+                        }
+                        name if is_class_object_name(name) => {
+                            let object = self.read_class_object_dxf(name, document.version)?;
+                            if let ClassObjectData::SectionViewStyle(style) = &object.data {
                                 document.section_view_style =
                                     Some(crate::entities::SectionViewStyle {
-                                show_arrows: style.flags & 0x02 != 0,
-                                show_plane_line: style.flags & 0x08 != 0,
-                                show_end_lines: style.flags & 0x20 != 0,
-                                arrow_size: style.arrow_symbol_size,
-                                arrow_extension: style.arrow_symbol_extension_length,
-                                label_height: style.identifier_height,
-                                label_offset: style.identifier_offset,
-                                label_position: style.identifier_position,
-                                arrow_position: style.arrow_position,
-                                end_line_length: style.end_line_length,
-                                end_line_overshoot: style.end_line_overshoot,
-                                arrow_start_handle: style.arrow_start_symbol.value(),
-                                arrow_end_handle: style.arrow_end_symbol.value(),
-                                arrow_is_default: style.arrow_start_symbol.is_null()
-                                    && style.arrow_end_symbol.is_null(),
-                            });
+                                        show_arrows: style.flags & 0x02 != 0,
+                                        show_plane_line: style.flags & 0x08 != 0,
+                                        show_end_lines: style.flags & 0x20 != 0,
+                                        arrow_size: style.arrow_symbol_size,
+                                        arrow_extension: style.arrow_symbol_extension_length,
+                                        label_height: style.identifier_height,
+                                        label_offset: style.identifier_offset,
+                                        label_position: style.identifier_position,
+                                        arrow_position: style.arrow_position,
+                                        end_line_length: style.end_line_length,
+                                        end_line_overshoot: style.end_line_overshoot,
+                                        arrow_start_handle: style.arrow_start_symbol.value(),
+                                        arrow_end_handle: style.arrow_end_symbol.value(),
+                                        arrow_is_default: style.arrow_start_symbol.is_null()
+                                            && style.arrow_end_symbol.is_null(),
+                                    });
+                            }
+                            document
+                                .objects
+                                .insert(object.handle, ObjectType::ClassObject(object));
                         }
-                        document
-                            .objects
-                            .insert(object.handle, ObjectType::ClassObject(object));
+                        name if is_dgn_line_style_name(name) => {
+                            let object = self.read_dgn_line_style_object(name)?;
+                            document
+                                .objects
+                                .insert(object.handle, ObjectType::DgnLineStyle(object));
+                        }
+                        "ACAD_PROXY_OBJECT" => {
+                            let object = self.read_proxy_object_dxf()?;
+                            let handle = object.handle;
+                            let object_type = if let Some(envelope) =
+                                crate::objects::semantic_property::decode_registered_class_envelope(
+                                    &object.payload,
+                                ) {
+                                ObjectType::RegisteredClass(RegisteredClassObject {
+                                    handle: object.handle,
+                                    owner: object.owner,
+                                    reactors: object.reactors,
+                                    xdictionary_handle: object.xdictionary_handle,
+                                    dxf_name: envelope.dxf_name,
+                                    cpp_class_name: envelope.cpp_class_name,
+                                    properties: envelope.properties,
+                                    payload: envelope.payload,
+                                    object_ids: object.object_ids,
+                                    raw_dwg_data: None,
+                                    raw_dwg_handle_bits: 0,
+                                    raw_dwg_version: None,
+                                })
+                            } else {
+                                ObjectType::ProxyObject(object)
+                            };
+                            document.objects.insert(handle, object_type);
+                        }
+                        name if is_registered_class_object_name(name) => {
+                            let object = self.read_registered_class_object(name)?;
+                            document
+                                .objects
+                                .insert(object.handle, ObjectType::RegisteredClass(object));
+                        }
+                        _ => {
+                            let type_name = pair.value_string.clone();
+                            if !crate::classes::arch::is_architecture_name(&type_name) {
+                                document.notifications.notify(
+                                    crate::notification::NotificationType::NotImplemented,
+                                    format!("Object not supported, read as Unknown: {type_name}"),
+                                );
+                            }
+                            let (handle, owner, raw_codes) = self.read_unknown_object_full()?;
+                            let raw_dxf_codes = if raw_codes.is_empty() {
+                                None
+                            } else {
+                                Some(raw_codes)
+                            };
+                            let object = if crate::classes::arch::is_architecture_name(&type_name) {
+                                let mut arch =
+                                    crate::classes::arch::ArchObject::new(type_name, handle, owner);
+                                arch.raw_dxf_codes = raw_dxf_codes;
+                                ObjectType::Arch(arch)
+                            } else {
+                                ObjectType::Unknown {
+                                    type_name,
+                                    handle,
+                                    owner,
+                                    raw_dxf_codes,
+                                    raw_dwg_data: None,
+                                    raw_dwg_handle_bits: 0,
+                                    raw_dwg_version: None,
+                                }
+                            };
+                            document.objects.insert(handle, object);
+                        }
                     }
-                    name if is_dgn_line_style_name(name) => {
-                        let object = self.read_dgn_line_style_object(name)?;
-                        document
-                            .objects
-                            .insert(object.handle, ObjectType::DgnLineStyle(object));
-                    }
-                    "ACAD_PROXY_OBJECT" => {
-                        let object = self.read_proxy_object_dxf()?;
-                        let handle = object.handle;
-                        let object_type = if let Some(envelope) =
-                            crate::objects::semantic_property::decode_registered_class_envelope(
-                                &object.payload,
-                            ) {
-                            ObjectType::RegisteredClass(RegisteredClassObject {
-                                handle: object.handle,
-                                owner: object.owner,
-                                reactors: object.reactors,
-                                xdictionary_handle: object.xdictionary_handle,
-                                dxf_name: envelope.dxf_name,
-                                cpp_class_name: envelope.cpp_class_name,
-                                properties: envelope.properties,
-                                payload: envelope.payload,
-                                object_ids: object.object_ids,
-                                raw_dwg_data: None,
-                                raw_dwg_handle_bits: 0,
-                                raw_dwg_version: None,
-                            })
-                        } else {
-                            ObjectType::ProxyObject(object)
-                        };
-                        document.objects.insert(handle, object_type);
-                    }
-                    name if is_registered_class_object_name(name) => {
-                        let object = self.read_registered_class_object(name)?;
-                        document
-                            .objects
-                            .insert(object.handle, ObjectType::RegisteredClass(object));
-                    }
-                    _ => {
-                        document.notifications.notify(
-                            crate::notification::NotificationType::NotImplemented,
-                            format!(
-                                "Object not supported, read as Unknown: {}",
-                                pair.value_string
-                            ),
-                        );
-                        let type_name = pair.value_string.clone();
-                        let (handle, owner, raw_codes) = self.read_unknown_object_full()?;
-                        document.objects.insert(
-                            handle,
-                            ObjectType::Unknown {
-                                type_name,
-                                handle,
-                                owner,
-                                raw_dxf_codes: if raw_codes.is_empty() {
-                                    None
-                                } else {
-                                    Some(raw_codes)
-                                },
-                                raw_dwg_data: None,
-                                raw_dwg_handle_bits: 0,
-                                raw_dwg_version: None,
-                            },
-                        );
-                    }
-                }
                     Ok(())
                 })();
                 if let Err(error) = result {
@@ -9705,7 +9728,7 @@ impl<'a> SectionReader<'a> {
                 // (0 = plain dash — must NOT materialize complex data, or every
                 // dashed linetype turns "complex" and renders nothing, #314),
                 // 75 = shape number. These were read swapped AND
-                // unconditionally, so AutoCAD's plain `74 0` gave every element
+                // unconditionally, so ACAD's plain `74 0` gave every element
                 // a Shape{0} complex record.
                 74 => {
                     if let Some(last) = linetype.elements.last_mut() {
@@ -11579,6 +11602,31 @@ impl<'a> SectionReader<'a> {
         Ok(())
     }
 
+    /// Read an entity that is not one of the built-in DXF types.
+    ///
+    /// Arch classes become editable [`ExtendedEntityData::Arch`]
+    /// records. Everything else stays an [`UnknownEntity`].
+    fn read_custom_entity(&mut self, dxf_name: &str) -> Result<EntityType> {
+        let entity = self.read_unknown_entity(dxf_name)?;
+        if !crate::classes::arch::is_architecture_name(dxf_name) {
+            return Ok(EntityType::Unknown(entity));
+        }
+        let mut data = crate::classes::arch::ArchEntityData::from_parts(
+            entity.dxf_name.clone(),
+            String::new(),
+            entity.common.graphic_data.as_deref(),
+        );
+        data.raw_dxf_codes = entity.raw_dxf_codes;
+        data.dwg_type_code = entity.dwg_type_code;
+        data.dwg_handle_bits = entity.dwg_handle_bits;
+        data.raw_dwg_data = entity.raw_dwg_data;
+        data.dwg_source_version = entity.dwg_source_version;
+        Ok(EntityType::Extended(Box::new(ExtendedEntity {
+            common: entity.common,
+            data: ExtendedEntityData::Arch(data),
+        })))
+    }
+
     /// Read an unknown entity, capturing common data and preserving
     /// entity-specific group codes for round-trip fidelity.
     fn read_unknown_entity(&mut self, dxf_name: &str) -> Result<UnknownEntity> {
@@ -12141,7 +12189,7 @@ impl<'a> SectionReader<'a> {
     /// Read an OLE2FRAME entity
     fn read_ole2frame(&mut self) -> Result<Option<Ole2Frame>> {
         let mut ole = Ole2Frame::new();
-        let mut binary_chunks: Vec<Vec<u8>> = Vec::new();
+        let mut data: Vec<u8> = Vec::new();
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -12201,17 +12249,10 @@ impl<'a> SectionReader<'a> {
                         ole.lock_aspect = v.clamp(0, u8::MAX as i16) as u8;
                     }
                 }
-                310 => {
-                    // Binary data chunk (hex-encoded)
-                    let hex = pair.value_string.trim();
-                    if let Ok(bytes) = (0..hex.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&hex[i..i.min(hex.len()).max(i + 2)], 16))
-                        .collect::<std::result::Result<Vec<u8>, _>>()
-                    {
-                        binary_chunks.push(bytes);
-                    }
-                }
+                // Binary data chunk (hex). A damaged chunk (odd length, not hex, not
+                // ASCII) keeps its whole hex pairs, as the other binary groups do; slicing
+                // the text by byte offsets panicked on it.
+                310 => append_hex_bytes(&mut data, &pair.value_string),
                 1 | 90 => { /* end marker and length */ }
                 _ => {
                     self.try_read_common_entity_code(&pair, &mut ole.common)?;
@@ -12219,8 +12260,6 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        // Concatenate binary chunks
-        let data: Vec<u8> = binary_chunks.into_iter().flatten().collect();
         let (storage, envelope, _, _) = Ole2Frame::decode_payload(&data);
         ole.storage = storage;
         ole.envelope = envelope;
@@ -15036,8 +15075,8 @@ impl<'a> SectionReader<'a> {
                 70 if current_subclass == "AcDbDimension" => {
                     let flags = pair.as_i16().unwrap_or(0);
                     base.text_user_positioned = (flags & 0x80) != 0;
-                    base.dwg_flags_byte = (base.dwg_flags_byte & !0x01)
-                        | u8::from(!base.text_user_positioned);
+                    base.dwg_flags_byte =
+                        (base.dwg_flags_byte & !0x01) | u8::from(!base.text_user_positioned);
                 }
                 71 if current_subclass == "AcDbArcDimension" => {
                     has_leader = pair.as_i16().unwrap_or(0) != 0
@@ -15874,11 +15913,14 @@ impl<'a> SectionReader<'a> {
                     11 => edge.major_axis_endpoint.x = p.as_double().unwrap_or(0.0),
                     21 => edge.major_axis_endpoint.y = p.as_double().unwrap_or(0.0),
                     40 => edge.minor_axis_ratio = p.as_double().unwrap_or(1.0),
+                    // Groups 50/51 are degrees. A missing or unparseable 51
+                    // keeps the full-ellipse default, which is already radians.
                     50 => edge.start_angle = p.as_double().unwrap_or(0.0).to_radians(),
                     51 => {
                         edge.end_angle = p
                             .as_double()
-                            .map_or(std::f64::consts::TAU, f64::to_radians)
+                            .map(f64::to_radians)
+                            .unwrap_or(std::f64::consts::TAU)
                     }
                     73 => edge.counter_clockwise = p.as_i16().unwrap_or(1) != 0,
                     _ => {
@@ -17556,6 +17598,9 @@ impl<'a> SectionReader<'a> {
         // without text, which the reference application reports as a bad
         // annotation id.
         leader.creation_type = crate::entities::leader::LeaderCreationType::NoAnnotation;
+        // Group 74 defaults to 1 (same direction as the horizontal vector).
+        // AutoCAD omits the group when it has that default.
+        leader.hookline_direction = crate::entities::leader::HooklineDirection::Same;
         let mut normal = PointReader::new();
         let mut horiz_dir = PointReader::new();
         let mut block_offset = PointReader::new();
@@ -22324,7 +22369,7 @@ mod tests {
         }
     }
 
-    /// The inverse block transform AutoCAD 2013 (AC1027) writes for an XCLIP
+    /// The inverse block transform ACAD 2013 (AC1027) writes for an XCLIP
     /// of an insert at (5, 5): one matrix row per group of four, translation
     /// last. Source: ezdxf `exploration/BlockClipped.dxf`, SPATIAL_FILTER #C1.
     #[test]
@@ -22352,7 +22397,7 @@ mod tests {
         assert!(p.y.abs() < 1e-9, "y={}", p.y);
     }
 
-    /// Reads a complete AutoCAD SPATIAL_FILTER object (values from the same
+    /// Reads a complete ACAD SPATIAL_FILTER object (values from the same
     /// AC1027 file) through the DXF reader.
     #[test]
     fn spatial_filter_from_native_dxf_keeps_its_boundary_area() {
@@ -22368,7 +22413,7 @@ mod tests {
             .write_to_vec()
             .unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        // Swap the written object body for AutoCAD's: keep every line up to the
+        // Swap the written object body for ACAD's: keep every line up to the
         // SPATIAL_FILTER type line and from its next group-0 line on.
         let lines: Vec<&str> = text.lines().collect();
         let start = (1..lines.len())

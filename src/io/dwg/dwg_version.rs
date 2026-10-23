@@ -90,7 +90,7 @@ impl DwgVersion {
         *self == DwgVersion::AC9
     }
 
-    /// Whether this is the shared AutoCAD Release 11/12 format family.
+    /// Whether this is the shared ACAD Release 11/12 format family.
     pub fn r11_r12(&self) -> bool {
         *self == DwgVersion::AC9
     }
@@ -266,10 +266,7 @@ mod tests {
             Some(DwgVersion::AC9)
         );
         assert_eq!(DwgVersion::AC9.to_dxf_version_string(), "AC1009");
-        assert_eq!(
-            DwgVersion::AC9.version_string(DxfVersion::AC1009),
-            "AC1009"
-        );
+        assert_eq!(DwgVersion::AC9.version_string(DxfVersion::AC1009), "AC1009");
         assert!(!DwgVersion::AC9.uses_page_format());
         assert!(!DwgVersion::AC9.supports_true_color());
         assert!(!DwgVersion::AC9.uses_unicode_text());

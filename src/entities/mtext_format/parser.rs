@@ -1,6 +1,6 @@
 //! MTEXT format string parser.
 //!
-//! Parses AutoCAD MTEXT formatted strings into structured [`MTextDocument`]
+//! Parses ACAD MTEXT formatted strings into structured [`MTextDocument`]
 //! containing paragraphs and styled spans.
 //!
 //! For the full specification of supported control codes, see the [`mtext_format`] module.
@@ -12,7 +12,7 @@ use super::types::*;
 /// Parse an MTEXT format string into a structured document.
 ///
 /// Recognizes all control codes whether or not the content is wrapped in
-/// `{...}`. Matches the behavior of AutoCAD MTEXT and MLEADER entities.
+/// `{...}`. Matches the behavior of ACAD MTEXT and MLEADER entities.
 ///
 /// # Arguments
 ///
@@ -1052,9 +1052,7 @@ impl MTextParser {
                             let rest = &part[1..];
                             if rest.is_empty()
                                 && part_index + 1 < parts.len()
-                                && parts[part_index + 1]
-                                    .parse::<f64>()
-                                    .is_ok()
+                                && parts[part_index + 1].parse::<f64>().is_ok()
                             {
                                 part_index += 1;
                                 (b',', parts[part_index])
@@ -1982,7 +1980,10 @@ mod tests {
         assert!(comma.to_mtext_string().contains(",tD,2"));
 
         let legacy = parse_mtext("{\\ptD2;Dot}", false);
-        assert_eq!(legacy.paragraphs[0].properties.tab_stops, vec![TabStop::Decimal(2.0)]);
+        assert_eq!(
+            legacy.paragraphs[0].properties.tab_stops,
+            vec![TabStop::Decimal(2.0)]
+        );
         assert!(legacy.to_mtext_string().contains(",tD2"));
     }
 

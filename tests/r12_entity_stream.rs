@@ -10,8 +10,8 @@ use acadrust::io::dwg::r12::header::{
 use acadrust::{CadDocument, DwgReader, DwgWriter, DxfVersion, EntityType, Handle, Vector3};
 
 // Entity bytes are assembled independently of the native encoder. Field
-// widths and JUMP's section-relative address/early CRC follow the CC0 KSY
-// and LibreDWG's JUMP specification.
+// widths and JUMP's section-relative address/early CRC follow the CC0
+// Kaitai Struct schema for the R12 entity stream.
 fn frame(kind: u8, flags: u8, options: u16, handle: u8, body: &[u8]) -> Vec<u8> {
     let mut bytes = vec![kind, flags | 32, 0, 0, 0, 0];
     bytes.extend_from_slice(&options.to_le_bytes());
@@ -280,7 +280,13 @@ pub fn block_polyline_extra_fixture() -> Vec<u8> {
     let polyline = polyline(0x20);
     let to_extra = jump(0x8000_0000, 0);
     let resume = begin.len() + polyline.len() + to_extra.len();
-    let blocks = [begin.clone(), polyline, to_extra, frame(13, 0, 0, 0x11, &[])].concat();
+    let blocks = [
+        begin.clone(),
+        polyline,
+        to_extra,
+        frame(13, 0, 0, 0x11, &[]),
+    ]
+    .concat();
     let owner = 0x4000_0000 | begin.len() as u32;
     let extras = [
         vertex(0x21, 1.0, 2.0),

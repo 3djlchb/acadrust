@@ -5,7 +5,11 @@ pub(super) fn explode_leader(leader: &Leader) -> Vec<EntityType> {
     if n < 2 {
         return Vec::new();
     }
-    let size = if leader.arrow_size > 1e-9 { leader.arrow_size } else { 0.18 };
+    let size = if leader.arrow_size > 1e-9 {
+        leader.arrow_size
+    } else {
+        0.18
+    };
     let mut path = leader.vertices.clone();
     let mut result = Vec::new();
     if leader.arrow_enabled {
@@ -21,10 +25,7 @@ pub(super) fn explode_leader(leader: &Leader) -> Vec<EntityType> {
     }
     match leader.path_type {
         LeaderPathType::Spline if path.len() >= 3 => {
-            let mut spline = Spline::from_control_points(
-                (path.len().min(4) - 1) as i32,
-                path,
-            );
+            let mut spline = Spline::from_control_points((path.len().min(4) - 1) as i32, path);
             spline.common = inherit_common(&leader.common);
             spline.normal = leader.normal;
             result.push(EntityType::Spline(spline));
@@ -50,7 +51,7 @@ pub(super) fn flatten_leader(leader: &Leader) -> Vec<EntityType> {
         .collect()
 }
 
-/// Length-to-half-width ratio of AutoCAD's default `_ClosedFilled` arrowhead:
+/// Length-to-half-width ratio of ACAD's default `_ClosedFilled` arrowhead:
 /// a unit-long triangle whose base spans `[-1/6, 1/6]`.
 const CLOSED_FILLED_HALF_WIDTH: f64 = 1.0 / 6.0;
 
@@ -86,7 +87,7 @@ pub(super) fn line_arrowhead_size(ml: &MultiLeader, line: &LeaderLine) -> f64 {
 }
 
 /// A leader line's full path: its own vertices, arrow tip first, then the
-/// root's connection point, where the landing starts. AutoCAD stores that last
+/// root's connection point, where the landing starts. ACAD stores that last
 /// point on the root only, so a straight leader is a single-vertex line.
 pub(super) fn leader_line_path(root: &LeaderRoot, line: &LeaderLine) -> Vec<Vector3> {
     let mut path = line.points.clone();
@@ -165,7 +166,8 @@ pub(super) fn emit_broken_leader_segment(
     let mut intervals: Vec<(f64, f64)> = breaks
         .iter()
         .filter_map(|pair| {
-            let project = |point: Vector3| ((point - start).dot(&delta) / length_squared).clamp(0.0, 1.0);
+            let project =
+                |point: Vector3| ((point - start).dot(&delta) / length_squared).clamp(0.0, 1.0);
             let a = project(pair.start_point);
             let b = project(pair.end_point);
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
@@ -197,7 +199,10 @@ pub(super) fn emit_broken_leader_segment(
     }
 }
 
-pub(super) fn leader_line_breaks(line: &LeaderLine, segment_index: usize) -> Vec<StartEndPointPair> {
+pub(super) fn leader_line_breaks(
+    line: &LeaderLine,
+    segment_index: usize,
+) -> Vec<StartEndPointPair> {
     let mut breaks: Vec<_> = line
         .break_infos
         .iter()
@@ -231,28 +236,19 @@ pub(super) fn explode_leader_line(
     }
 
     if line.path_type == MultiLeaderPathType::Spline && path.len() >= 3 {
-        let mut spline = Spline::from_control_points(
-            (path.len().min(4) - 1) as i32,
-            path,
-        );
+        let mut spline = Spline::from_control_points((path.len().min(4) - 1) as i32, path);
         spline.common = inherit_common(&ml.common);
         result.push(EntityType::Spline(spline));
     } else {
         for (segment_index, pair) in path.windows(2).enumerate() {
             let breaks = leader_line_breaks(line, segment_index);
-            emit_broken_leader_segment(
-                pair[0],
-                pair[1],
-                &breaks,
-                &ml.common,
-                result,
-            );
+            emit_broken_leader_segment(pair[0], pair[1], &breaks, &ml.common, result);
         }
     }
 }
 
 pub(super) fn explode_multileader(ml: &MultiLeader) -> Vec<EntityType> {
-    // Decompose MultiLeader the way AutoCAD's EXPLODE does: per leader line,
+    // Decompose MultiLeader the way ACAD's EXPLODE does: per leader line,
     // the arrowhead and the segments down to the root's connection point;
     // per root, the landing; then the text.
     let mut result = Vec::new();
@@ -318,4 +314,3 @@ pub(super) fn explode_multileader_native(ml: &MultiLeader) -> Vec<EntityType> {
     }
     result
 }
-

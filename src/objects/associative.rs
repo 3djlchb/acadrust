@@ -1,6 +1,6 @@
 //! Semantic model for associative-network objects.
 //!
-//! AutoCAD stores most associative objects as short inheritance chains.  The
+//! ACAD stores most associative objects as short inheritance chains.  The
 //! shared structs below mirror those chains so DWG and DXF use one lossless
 //! representation instead of class-specific byte blobs.
 
@@ -202,7 +202,10 @@ impl AssociativeData {
             Self::Variable(value) => {
                 action_references(&value.action, target)
                     || eval_references(&value.value, target)
-                    || value.dependencies.iter().any(|item| item.dependency == target)
+                    || value
+                        .dependencies
+                        .iter()
+                        .any(|item| item.dependency == target)
             }
             Self::CompoundActionParam(value)
             | Self::PointRefActionParam(value)
@@ -454,14 +457,18 @@ fn eval_references(value: &AssocEvalVariant, target: Handle) -> bool {
 }
 
 fn array_items_reference(items: &[AssocArrayItem], target: Handle) -> bool {
-    items.iter().any(|item| {
-        item.first_handle == Some(target) || item.second_handle == Some(target)
-    })
+    items
+        .iter()
+        .any(|item| item.first_handle == Some(target) || item.second_handle == Some(target))
 }
 
 fn visit_array_items(items: &mut [AssocArrayItem], visit: &mut impl FnMut(&mut Handle)) {
     for item in items {
-        for handle in item.first_handle.iter_mut().chain(item.second_handle.iter_mut()) {
+        for handle in item
+            .first_handle
+            .iter_mut()
+            .chain(item.second_handle.iter_mut())
+        {
             visit(handle);
         }
     }
@@ -1405,7 +1412,7 @@ pub fn associative_canonical_name(name: &str) -> String {
         upper
     };
     match canonical.as_str() {
-        // Seen in Autodesk/LibreDWG class tables without the second `D`.
+        // Native class tables include this spelling without the second `D`.
         "ASSOCALIGNEDIMACTIONBODY" => "ASSOCALIGNEDDIMACTIONBODY".to_string(),
         "ACDBPERSSUBENTMANAGER" => "PERSUBENTMGR".to_string(),
         "ACDBDIMASSOC" => "DIMASSOC".to_string(),
