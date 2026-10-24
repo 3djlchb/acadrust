@@ -39,10 +39,23 @@ use crate::types::Handle;
 use crate::types::LineWeight;
 use std::collections::{HashMap, HashSet};
 
-/// Read the DWG-only context-base flag added in the R2010 layout. ODA
-/// §20.4.89 specifies a default value of true; earlier files retain their
-/// version/default pair.
+/// ODA §20.4.89 documents a file-to-extension-dictionary bit before the
+/// default flag on R2010+. AutoCAD does not write that bit for annotative
+/// context leaves (aligned dimensions, text, MTEXT, leaders, hatches, and
+/// the same classes through R2018). Consuming it shifts the rest of the
+/// record by one bit and the strict read stops. The value stays at ODA's
+/// documented default. The MLeader decoder is the exception: it tries this
+/// native layout first, then the two-bit ODA layout.
 fn read_context_file_dictionary_flag(
+    _reader: &mut DwgMergedReader,
+    _version: crate::io::dwg::dwg_version::DwgVersion,
+) -> bool {
+    true
+}
+
+/// ODA §20.4.89 two-bit base. Used only when the native one-bit decode of an
+/// MLeader context does not fit the record.
+fn read_oda_context_file_dictionary_flag(
     reader: &mut DwgMergedReader,
     version: crate::io::dwg::dwg_version::DwgVersion,
 ) -> bool {
@@ -1619,6 +1632,7 @@ impl DwgDocumentBuilder {
                                     scale: s.scale,
                                     rotation: s.rotation,
                                     absolute_rotation: s.dwg_flags & 0x01 != 0,
+                                    upright: s.dwg_flags & 0x08 != 0,
                                     source_flags: s.dwg_flags as u8,
                                     offset: [s.offset_x, s.offset_y],
                                 })
@@ -3631,10 +3645,16 @@ impl DwgDocumentBuilder {
                 br.block_end_handle = document.allocate_handle();
                 // Cross-link the owning Layout object, if present, so the record
                 // and its Layout reference each other like a normally-read pair.
-                for (oh, obj) in document.objects.iter() {
-                    if let crate::objects::ObjectType::Layout(l) = obj {
+                // The first match wins, so walk in handle order: `objects` is a
+                // hash map and a record with more than one candidate Layout
+                // would otherwise pick a different one on every read.
+                let mut layouts: Vec<crate::types::Handle> =
+                    document.objects.keys().copied().collect();
+                layouts.sort_by_key(|handle| handle.value());
+                for oh in layouts {
+                    if let Some(crate::objects::ObjectType::Layout(l)) = document.objects.get(&oh) {
                         if l.block_record == h {
-                            br.layout = *oh;
+                            br.layout = oh;
                             break;
                         }
                     }
@@ -5258,6 +5278,10 @@ impl DwgDocumentBuilder {
                     e.dwg_mode = data.mode;
                     e.is_paper_space = data.mode == 1;
                     e.lock_aspect = data.lock_aspect;
+                    // DWG keeps no source application; the object's storage
+                    // names it.
+                    e.source_application =
+                        crate::entities::ole_user_type(&e.encoded_payload()).unwrap_or_default();
                     let _ = document.add_entity(EntityType::Ole2Frame(Box::new(e)));
                 }
 
@@ -7307,8 +7331,11 @@ impl DwgDocumentBuilder {
                                         legacy_context,
                                     )
                                 } else {
+                                    // ODA §20.4.89 layout: the dictionary bit
+                                    // is present. Native AutoCAD records take
+                                    // the branch above and never reach here.
                                     let has_file_to_extension_dictionary =
-                                        read_context_file_dictionary_flag(
+                                        read_oda_context_file_dictionary_flag(
                                             &mut reader,
                                             self.obj_reader.version(),
                                         );
