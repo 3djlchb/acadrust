@@ -187,3 +187,141 @@ fn r2018_cell_style_map_preserves_inherited_text_style() {
 
     assert_eq!(cell.cell_style.content_format.text_style, Handle::NULL);
 }
+
+// A native-style legacy companion remains an owned database object even when
+// its cell styles have also been restored into a modern TABLESTYLE.
+#[test]
+fn table_style_companion_map_survives_dxf_to_dwg() {
+    use acadrust::objects::{TableContentFormat, TableGridFormat};
+    use acadrust::{DxfReader, DxfWriter};
+    const KEY: &str = "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP";
+    for version in [
+        DxfVersion::AC1021,
+        DxfVersion::AC1024,
+        DxfVersion::AC1027,
+        DxfVersion::AC1032,
+    ] {
+        let mut doc = CadDocument::with_version(version);
+        let text_style = doc.text_styles.get("Standard").unwrap().handle;
+        let owner = doc
+            .objects
+            .values()
+            .find_map(|object| match object {
+                ObjectType::TableStyle(style) if style.name == "Standard" => Some(style.handle),
+                _ => None,
+            })
+            .unwrap();
+        let cell = NamedTableCellStyle {
+            id: 12,
+            style_type: 2,
+            name: "Custom data".to_string(),
+            cell_style: TableCellStyleData {
+                style_type: 5,
+                margin_override_flags: 1,
+                vertical_margin: 1.5,
+                horizontal_margin: 2.5,
+                bottom_margin: 3.5,
+                right_margin: 4.5,
+                horizontal_spacing: 0.5,
+                vertical_spacing: 0.75,
+                content_format: TableContentFormat {
+                    text_style,
+                    text_height: 4.5,
+                    ..Default::default()
+                },
+                borders: vec![TableGridFormat {
+                    index_mask: 63,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        };
+        if let Some(ObjectType::TableStyle(style)) = doc.objects.get_mut(&owner) {
+            style.modern_overrides = vec![(cell.id, cell.clone())];
+        }
+        let dictionary = doc.ensure_extension_dictionary(owner);
+        let handle = doc.allocate_handle();
+        let mut map = DataObject::new(DataObjectData::CellStyleMap(CellStyleMap {
+            cells: vec![cell],
+        }));
+        map.handle = handle;
+        map.owner = dictionary;
+        map.reactors = vec![dictionary];
+        doc.objects.insert(handle, ObjectType::DataObject(map));
+        let Some(ObjectType::Dictionary(entries)) = doc.objects.get_mut(&dictionary) else {
+            panic!()
+        };
+        entries.add_entry(KEY, handle);
+        entries.hard_owner = true;
+        entries.hard_owner_entries.push(KEY.to_string());
+
+        let dxf = DxfWriter::new(&doc).write_to_vec().unwrap();
+        let source = DxfReader::from_reader(Cursor::new(dxf))
+            .unwrap()
+            .read()
+            .unwrap();
+        let Some(ObjectType::DataObject(expected)) = source.objects.get(&handle) else {
+            panic!("DXF companion missing")
+        };
+        assert!(
+            matches!(&expected.data, DataObjectData::CellStyleMap(map) if map.cells.len() == 1)
+        );
+        let bytes = DwgWriter::write_to_vec(&source).unwrap();
+        assert_eq!(
+            source.objects.get(&handle),
+            Some(&ObjectType::DataObject(expected.clone())),
+            "writer must not mutate source"
+        );
+        let mut back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
+        for _ in 0..2 {
+            let Some(ObjectType::DataObject(actual)) = back.objects.get(&handle) else {
+                panic!("{version:?}: companion map was dropped")
+            };
+            assert_eq!(actual, expected, "{version:?}: map contents and references");
+            let Some(ObjectType::Dictionary(entries)) = back.objects.get(&dictionary) else {
+                panic!("dictionary missing")
+            };
+            assert_eq!(entries.get(KEY), Some(handle));
+            assert!(entries.hard_owner);
+            assert_eq!(back.extension_dictionary_handle(owner), Some(dictionary));
+            let bytes = DwgWriter::write_to_vec(&back).unwrap();
+            back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs a native ProgeCAD DXF in ARQ_NATIVE_XREF_DXF"]
+fn native_progecad_companion_map_survives_dwg_conversion() {
+    use acadrust::DxfReader;
+    let path = std::env::var_os("ARQ_NATIVE_XREF_DXF").expect("set the native DXF path");
+    let source = DxfReader::from_file(path).unwrap().read().unwrap();
+    let maps: Vec<_> = source
+        .objects
+        .iter()
+        .filter_map(|(handle, object)| match object {
+            ObjectType::DataObject(map) if matches!(&map.data, DataObjectData::CellStyleMap(_)) => {
+                Some((*handle, map.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(maps.len(), 1, "the native fixture has one companion map");
+    let bytes = DwgWriter::write_to_vec(&source).unwrap();
+    let back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
+    for (handle, map) in maps {
+        assert_eq!(
+            back.objects.get(&handle),
+            Some(&ObjectType::DataObject(map.clone()))
+        );
+        let key = "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP";
+        let Some(ObjectType::Dictionary(dictionary)) = back.objects.get(&map.owner) else {
+            panic!("map dictionary missing")
+        };
+        assert_eq!(dictionary.get(key), Some(handle));
+        assert_eq!(
+            back.extension_dictionary_handle(dictionary.owner),
+            Some(map.owner)
+        );
+    }
+}
