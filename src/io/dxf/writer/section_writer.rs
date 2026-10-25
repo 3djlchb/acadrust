@@ -2169,6 +2169,15 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_subclass("AcDbBlockBegin")?;
         self.writer.write_string(2, block_record.name())?;
         self.writer.write_i16(70, flags)?;
+        // Preserve the optional unloaded marker observed in native ProgeCAD
+        // exports; omitting it lets a host load the reference on the next open.
+        if block_record.flags.is_xref_unloaded
+            && (block_record.flags.is_xref
+                || block_record.flags.is_xref_overlay
+                || !block_record.xref_path.is_empty())
+        {
+            self.writer.write_i16(71, 1)?;
+        }
         self.writer.write_double(10, block_record.base_point.x)?;
         self.writer.write_double(20, block_record.base_point.y)?;
         self.writer.write_double(30, block_record.base_point.z)?;

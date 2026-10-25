@@ -3464,6 +3464,7 @@ impl<'a> SectionReader<'a> {
         // BLOCK entity code 70 = the authoritative block-type flags
         // (1=anonymous, 2=has-attributes, 4=xref, 8=xref-overlay).
         let mut block_flags: i16 = 0;
+        let mut xref_unloaded = false;
 
         let mut point_reader = PointReader::new();
 
@@ -3506,6 +3507,10 @@ impl<'a> SectionReader<'a> {
                         block_flags = v;
                     }
                 }
+                // Native ProgeCAD DXF writes an unloaded Xref as BLOCK 71=1.
+                // This is separate from code 70's resolved/referenced bits:
+                // a missing reference can have code 70=4 without being unloaded.
+                71 => xref_unloaded = pair.as_i16() == Some(1),
                 _ => {}
             }
         }
@@ -3595,6 +3600,10 @@ impl<'a> SectionReader<'a> {
                             block_record.flags.has_attributes = (block_flags & 2) != 0;
                             block_record.flags.is_xref = (block_flags & 4) != 0;
                             block_record.flags.is_xref_overlay = (block_flags & 8) != 0;
+                            block_record.flags.is_xref_unloaded = xref_unloaded
+                                && (block_record.flags.is_xref
+                                    || block_record.flags.is_xref_overlay
+                                    || !block_record.xref_path.is_empty());
                             // The BLOCKS section is authoritative for marker
                             // identities. Keep missing source handles null so
                             // the post-read pass can assign fresh handles after
