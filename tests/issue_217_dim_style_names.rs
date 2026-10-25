@@ -35,6 +35,10 @@ fn dwg_roundtrip(version: DxfVersion) {
         .expect("read dwg")
         .header;
     assert_eq!(h.dim_text_style_name, "MyDimText", "{version:?} $DIMTXSTY");
+    // The DWG header holds the linetype handles from R2007 on.
+    if version < DxfVersion::AC1021 {
+        return;
+    }
     assert_eq!(h.dim_linetype_name, "BATTING", "{version:?} $DIMLTYPE");
     assert_eq!(h.dim_linetype1_name, "TRACKS", "{version:?} $DIMLTEX1");
     assert_eq!(h.dim_linetype2_name, "HIDDEN2", "{version:?} $DIMLTEX2");
@@ -43,6 +47,11 @@ fn dwg_roundtrip(version: DxfVersion) {
 #[test]
 fn ac1015_dwg_gives_the_dimension_names() {
     dwg_roundtrip(DxfVersion::AC1015);
+}
+
+#[test]
+fn ac1021_dwg_gives_the_dimension_names() {
+    dwg_roundtrip(DxfVersion::AC1021);
 }
 
 #[test]

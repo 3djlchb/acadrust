@@ -682,6 +682,14 @@ pub struct HeaderVariables {
     pub dim_arrow_block2_handle: Handle,
     /// Leader arrow block handle (DIMLDRBLK)
     pub dim_leader_arrow_block_handle: Handle,
+    /// DIMTXSTY - name of the dimension text style
+    pub dim_text_style_name: String,
+    /// DIMLTYPE - name of the dimension line linetype
+    pub dim_linetype_name: String,
+    /// DIMLTEX1 - name of the first extension line linetype
+    pub dim_linetype1_name: String,
+    /// DIMLTEX2 - name of the second extension line linetype
+    pub dim_linetype2_name: String,
     /// DIMLWD - Dimension line weight
     pub dim_line_weight: i16,
     /// DIMLWE - Extension line weight
@@ -1088,6 +1096,10 @@ impl Default for HeaderVariables {
             dim_arrow_block1_handle: Handle::NULL,
             dim_arrow_block2_handle: Handle::NULL,
             dim_leader_arrow_block_handle: Handle::NULL,
+            dim_text_style_name: String::from("Standard"),
+            dim_linetype_name: String::from("ByBlock"),
+            dim_linetype1_name: String::from("ByBlock"),
+            dim_linetype2_name: String::from("ByBlock"),
             dim_line_weight: -2,     // ByBlock
             dim_ext_line_weight: -2, // ByBlock
 

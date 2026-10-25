@@ -3552,6 +3552,29 @@ impl DwgDocumentBuilder {
             document.header.current_dimstyle_name = ds.name.clone();
         }
 
+        // The dimension text style and linetypes are handles in the DWG header too.
+        if let Some(style) = document
+            .text_styles
+            .iter()
+            .find(|s| s.handle == document.header.dim_text_style_handle)
+        {
+            document.header.dim_text_style_name = style.name.clone();
+        }
+        for (handle, slot) in [
+            (document.header.dim_linetype_handle, 0usize),
+            (document.header.dim_linetype1_handle, 1),
+            (document.header.dim_linetype2_handle, 2),
+        ] {
+            if let Some(lt) = document.line_types.iter().find(|l| l.handle == handle) {
+                let name = lt.name.clone();
+                match slot {
+                    0 => document.header.dim_linetype_name = name,
+                    1 => document.header.dim_linetype1_name = name,
+                    _ => document.header.dim_linetype2_name = name,
+                }
+            }
+        }
+
         // ── Post-pass: guarantee the mandatory *Model_Space / *Paper_Space ──
         // block records exist and enumerate their geometry.
         //

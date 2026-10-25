@@ -3095,6 +3095,26 @@ impl<'a> SectionReader<'a> {
                         hdr.dim_alt_post = p.value_string.clone();
                     }
                 }
+                "$DIMTXSTY" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_text_style_name = p.value_string.clone();
+                    }
+                }
+                "$DIMLTYPE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype_name = p.value_string.clone();
+                    }
+                }
+                "$DIMLTEX1" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype1_name = p.value_string.clone();
+                    }
+                }
+                "$DIMLTEX2" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype2_name = p.value_string.clone();
+                    }
+                }
                 "$DIMBLK" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_arrow_block = p.value_string.clone();
