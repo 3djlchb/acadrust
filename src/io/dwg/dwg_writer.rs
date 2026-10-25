@@ -782,9 +782,18 @@ fn prepare_roundtrip_records(document: &mut std::borrow::Cow<'_, CadDocument>) {
         let is_visual_style = matches!(object, ObjectType::VisualStyle(_));
         for (name, child) in &entries.entries {
             let drop = match (name.as_str(), document.objects.get(child)) {
-                // Keep the companion CELLSTYLEMAP and its dictionary link.
-                // Restoring its cells into TABLESTYLE does not make the owned
-                // database record disposable during DXF-to-DWG conversion.
+                (
+                    "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP",
+                    Some(ObjectType::DataObject(map)),
+                ) => match (&object, &map.data) {
+                    (ObjectType::TableStyle(style), crate::objects::DataObjectData::CellStyleMap(cells)) => {
+                        map.owner == dictionary
+                            && map.xdictionary_handle.is_none()
+                            && map.reactors.iter().all(|reactor| *reactor == dictionary)
+                            && style.represents_cell_style_map(cells)
+                    }
+                    _ => false,
+                },
                 ("ACAD_XREC_ROUNDTRIP", Some(ObjectType::XRecord(record))) => {
                     let prefix = if is_visual_style {
                         "RTVS"

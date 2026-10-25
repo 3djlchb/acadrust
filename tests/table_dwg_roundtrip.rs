@@ -188,10 +188,10 @@ fn r2018_cell_style_map_preserves_inherited_text_style() {
     assert_eq!(cell.cell_style.content_format.text_style, Handle::NULL);
 }
 
-// A native-style legacy companion remains an owned database object even when
-// its cell styles have also been restored into a modern TABLESTYLE.
+// Canonical modern DWG stores every cell in TABLESTYLE; a legacy companion
+// is retired only when its complete contents have been transferred.
 #[test]
-fn table_style_companion_map_survives_dxf_to_dwg() {
+fn table_style_companion_map_is_folded_without_losing_cells() {
     use acadrust::objects::{TableContentFormat, TableGridFormat};
     use acadrust::{DxfReader, DxfWriter};
     const KEY: &str = "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP";
@@ -274,16 +274,29 @@ fn table_style_companion_map_survives_dxf_to_dwg() {
         );
         let mut back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
         for _ in 0..2 {
-            let Some(ObjectType::DataObject(actual)) = back.objects.get(&handle) else {
-                panic!("{version:?}: companion map was dropped")
+            let Some(ObjectType::TableStyle(style)) = back.objects.get(&owner) else {
+                panic!("style missing")
             };
-            assert_eq!(actual, expected, "{version:?}: map contents and references");
+            let DataObjectData::CellStyleMap(cells) = &expected.data else {
+                panic!()
+            };
+            assert!(
+                style.represents_cell_style_map(cells),
+                "{version:?}: complete cells survive"
+            );
             let Some(ObjectType::Dictionary(entries)) = back.objects.get(&dictionary) else {
                 panic!("dictionary missing")
             };
-            assert_eq!(entries.get(KEY), Some(handle));
-            assert!(entries.hard_owner);
-            assert_eq!(back.extension_dictionary_handle(owner), Some(dictionary));
+            if version >= DxfVersion::AC1024 {
+                assert!(!back.objects.contains_key(&handle));
+                assert_eq!(entries.get(KEY), None);
+            } else {
+                assert_eq!(
+                    back.objects.get(&handle),
+                    Some(&ObjectType::DataObject(expected.clone()))
+                );
+                assert_eq!(entries.get(KEY), Some(handle));
+            }
             let bytes = DwgWriter::write_to_vec(&back).unwrap();
             back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
         }
@@ -292,7 +305,7 @@ fn table_style_companion_map_survives_dxf_to_dwg() {
 
 #[test]
 #[ignore = "needs a native ProgeCAD DXF in ARQ_NATIVE_XREF_DXF"]
-fn native_progecad_companion_map_survives_dwg_conversion() {
+fn native_progecad_companion_map_is_folded_without_losing_cells() {
     use acadrust::DxfReader;
     let path = std::env::var_os("ARQ_NATIVE_XREF_DXF").expect("set the native DXF path");
     let source = DxfReader::from_file(path).unwrap().read().unwrap();
@@ -310,18 +323,52 @@ fn native_progecad_companion_map_survives_dwg_conversion() {
     let bytes = DwgWriter::write_to_vec(&source).unwrap();
     let back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
     for (handle, map) in maps {
-        assert_eq!(
-            back.objects.get(&handle),
-            Some(&ObjectType::DataObject(map.clone()))
-        );
-        let key = "ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP";
+        assert!(!back.objects.contains_key(&handle));
         let Some(ObjectType::Dictionary(dictionary)) = back.objects.get(&map.owner) else {
-            panic!("map dictionary missing")
+            panic!("dictionary missing")
         };
-        assert_eq!(dictionary.get(key), Some(handle));
         assert_eq!(
-            back.extension_dictionary_handle(dictionary.owner),
-            Some(map.owner)
+            dictionary.get("ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP"),
+            None
         );
+        let Some(ObjectType::TableStyle(style)) = back.objects.get(&dictionary.owner) else {
+            panic!("style missing")
+        };
+        let DataObjectData::CellStyleMap(cells) = &map.data else {
+            panic!()
+        };
+        assert!(style.represents_cell_style_map(cells));
+        assert_eq!((style.horizontal_margin, style.vertical_margin), (1.5, 1.5));
     }
+}
+
+#[test]
+fn conflicting_companion_map_is_not_discarded() {
+    let mut doc = CadDocument::with_version(DxfVersion::AC1027);
+    let owner = doc
+        .objects
+        .iter()
+        .find_map(|(h, o)| match o {
+            ObjectType::TableStyle(s) if s.name == "Standard" => Some(*h),
+            _ => None,
+        })
+        .unwrap();
+    let dictionary = doc.ensure_extension_dictionary(owner);
+    let handle = doc.allocate_handle();
+    let mut map = DataObject::new(DataObjectData::CellStyleMap(CellStyleMap {
+        cells: vec![NamedTableCellStyle {
+            id: 90,
+            name: "Not represented".to_owned(),
+            ..Default::default()
+        }],
+    }));
+    map.handle = handle;
+    map.owner = dictionary;
+    doc.objects.insert(handle, ObjectType::DataObject(map));
+    if let Some(ObjectType::Dictionary(d)) = doc.objects.get_mut(&dictionary) {
+        d.add_entry("ACAD_ROUNDTRIP_2008_TABLESTYLE_CELLSTYLEMAP", handle);
+    }
+    let bytes = DwgWriter::write_to_vec(&doc).unwrap();
+    let back = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
+    assert!(back.objects.contains_key(&handle));
 }

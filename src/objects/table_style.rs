@@ -598,6 +598,19 @@ impl TableStyle {
     /// Subclass marker.
     pub const SUBCLASS_MARKER: &'static str = "AcDbTableStyle";
 
+    /// Whether every companion-map cell is represented exactly by the modern
+    /// row overrides. Duplicate ids and empty maps are not proof of conversion.
+    pub fn represents_cell_style_map(&self, map: &crate::objects::CellStyleMap) -> bool {
+        !map.cells.is_empty()
+            && map.cells.len() == self.modern_overrides.len()
+            && map.cells.iter().enumerate().all(|(index, cell)| {
+                !map.cells[..index].iter().any(|other| other.id == cell.id)
+                    && self.modern_overrides.iter().any(|(key, value)| {
+                        *key == cell.id && value == cell
+                    })
+            })
+    }
+
     /// Default style name.
     pub const STANDARD: &'static str = "Standard";
 
