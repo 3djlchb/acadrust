@@ -82,6 +82,14 @@ impl MTextParser {
         self.ctx_stack.last_mut().unwrap()
     }
 
+    /// Hand the current paragraph to the document, recording the span
+    /// properties in effect at its end (see [`MTextParagraph::end_properties`]).
+    fn end_paragraph(&mut self) {
+        let mut paragraph = std::mem::take(&mut self.current_paragraph);
+        paragraph.end_properties = self.current_props().clone();
+        self.document.push_paragraph(paragraph);
+    }
+
     /// Parse with full MTEXT formatting: all control codes are recognized
     /// whether or not the content is wrapped in `{...}`.
     fn parse_formatted(mut self, merge_spans: bool) -> MTextDocument {
@@ -264,8 +272,7 @@ impl MTextParser {
                         Some('J') => {
                             self.pos += 2;
                             self.flush_current_span(merge_spans);
-                            self.document
-                                .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                            self.end_paragraph();
                         }
                         Some('M') => {
                             self.pos += 2;
@@ -281,8 +288,7 @@ impl MTextParser {
                     // or the caret form `^J`.
                     self.pos += 1;
                     self.flush_current_span(merge_spans);
-                    self.document
-                        .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                    self.end_paragraph();
                 }
                 '\t' => {
                     // Keep the tab character; the layout engine resolves it to
@@ -305,8 +311,7 @@ impl MTextParser {
         // End of input — flush remaining
         self.flush_current_span(merge_spans);
         if !self.current_paragraph.is_empty() {
-            self.document
-                .push_paragraph(std::mem::take(&mut self.current_paragraph));
+            self.end_paragraph();
         }
     }
 
@@ -461,8 +466,7 @@ impl MTextParser {
             'P' => {
                 self.pos += 1;
                 self.flush_current_span(false);
-                self.document
-                    .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                self.end_paragraph();
                 // Span properties (color, font, bold, height, etc.) carry over
                 // to the next paragraph. Only paragraph-level properties are
                 // per-paragraph (set via \p...; control codes).
@@ -478,8 +482,7 @@ impl MTextParser {
             'N' => {
                 self.pos += 1;
                 self.flush_current_span(false);
-                self.document
-                    .push_paragraph(std::mem::take(&mut self.current_paragraph));
+                self.end_paragraph();
                 // Span properties carry over, same as \P — the one difference
                 // is that what follows opens a new column, so mark it. Drop the
                 // mark and `\N` is indistinguishable from `\P` downstream.
@@ -899,8 +902,7 @@ impl MTextParser {
         if expr.trim().is_empty() {
             self.pos = start_pos;
             self.flush_current_span(false);
-            self.document
-                .push_paragraph(std::mem::take(&mut self.current_paragraph));
+            self.end_paragraph();
             self.current_props_mut()
                 .clone_from(&SpanProperties::default());
             return;
@@ -1811,6 +1813,53 @@ mod tests {
     fn test_parse_unicode_escape() {
         let doc = parse_mtext(r"{\U+00B0}", false);
         assert_eq!(doc.paragraphs[0].to_plain_text(), "°");
+    }
+
+    #[test]
+    fn an_empty_paragraph_keeps_the_span_properties_at_its_break() {
+        // A group closed before the break does not apply to the empty line.
+        let doc = parse_mtext(r"{\H2x;Title}\P\PBody", false);
+        assert_eq!(doc.paragraphs.len(), 3);
+        assert!(doc.paragraphs[1].is_empty());
+        assert_eq!(doc.paragraphs[1].end_properties.height, None);
+        // A code before the break does.
+        let doc = parse_mtext(r"\H2x;\PA", false);
+        assert!(doc.paragraphs[0].is_empty());
+        assert_eq!(
+            doc.paragraphs[0].end_properties.height,
+            Some(MTextScalar::Factor(2.0))
+        );
+        // Inside a group the break takes the group's properties.
+        let doc = parse_mtext(r"{\C1;A\P\PB}", false);
+        assert!(doc.paragraphs[1].is_empty());
+        assert_eq!(
+            doc.paragraphs[1].end_properties.color,
+            Some(MTextColor::Index(1))
+        );
+    }
+
+    #[test]
+    fn every_paragraph_break_records_the_span_properties_in_effect() {
+        for (text, kind) in [
+            (r"\H3;A\PB", r"\P"),
+            (r"\H3;A\NB", r"\N"),
+            ("\\H3;A^JB", "^J"),
+            ("\\H3;A\nB", "line feed"),
+            (r"\H3;A\p;B", r"\p;"),
+        ] {
+            let doc = parse_mtext(text, false);
+            assert_eq!(
+                doc.paragraphs[0].end_properties.height,
+                Some(MTextScalar::Absolute(3.0)),
+                "{kind}"
+            );
+        }
+        // The last paragraph ends at the end of the text.
+        let doc = parse_mtext(r"A\H3;", false);
+        assert_eq!(
+            doc.paragraphs[0].end_properties.height,
+            Some(MTextScalar::Absolute(3.0))
+        );
     }
 
     #[test]
