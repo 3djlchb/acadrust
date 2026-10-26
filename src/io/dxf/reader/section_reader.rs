@@ -3289,6 +3289,19 @@ impl<'a> SectionReader<'a> {
                 "$PUCSORGBACK" => {
                     self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[5])?;
                 }
+                "$PELLIPSE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        // An int in some versions of AutoCAD, a bool in others.
+                        if let Some(v) = p.as_i16() {
+                            hdr.create_ellipse_as_polyline = v != 0;
+                        }
+                    }
+                }
+                "$PUCSBASE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.paper_ucs_base = p.value_string.clone();
+                    }
+                }
                 "$DIMTXTDIRECTION" => {
                     if let Some(p) = self.reader.read_pair()? {
                         if let Some(v) = p.as_i16() {
