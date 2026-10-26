@@ -2,6 +2,11 @@
 
 ### Unreleased
 
+- **DWG allocation budget** - `DwgReadOptions::max_decompressed_bytes` caps the
+  total decompressed bytes one read allocates across sections and system pages,
+  so a small crafted file fails with a `DxfError` instead of exhausting memory.
+  Buffers sized from file data are now reserved fallibly, turning an allocation
+  failure into a `DxfError` rather than a process abort (issue #226).
 - **Annotative context data** - AutoCAD does not store the R2010
   file-to-extension-dictionary bit on object-context leaves. 0.6.7 read that
   bit and rejected drawings whose first failure was an aligned-dimension,

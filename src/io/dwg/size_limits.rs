@@ -5,7 +5,10 @@
 //! hostile file can declare gigabytes, or a negative 32-bit size that turns into nearly
 //! `usize::MAX`; the allocation then aborts the process and no caller can catch it. Each such
 //! size goes through [`size_from_file`] before anything is allocated, in strict and failsafe
-//! mode alike.
+//! mode alike. Buffers sized from file data are reserved with [`try_zeroed_vec`] /
+//! [`try_vec_with_capacity`], so an allocation failure becomes a `DxfError`. Callers can also
+//! cap the total across a whole read with
+//! [`DwgReadOptions::max_decompressed_bytes`](crate::DwgReadOptions::max_decompressed_bytes).
 
 use std::fmt::Display;
 use std::ops::RangeInclusive;
@@ -22,6 +25,32 @@ pub(crate) const MAX_DATA_PAGE_SIZE: usize = 4 * 1024 * 1024;
 
 /// Largest decompressed size of one section; it also bounds the sum of the section's pages.
 pub(crate) const MAX_SECTION_SIZE: usize = 1024 * 1024 * 1024;
+
+/// Allocates a zero-filled buffer, reporting an allocation failure as an error.
+///
+/// Buffers sized from file-declared values use this instead of `vec![0; size]`: the latter
+/// aborts the process through `handle_alloc_error`, which neither `Result` nor
+/// `catch_unwind` can recover from.
+pub(crate) fn try_zeroed_vec(len: usize, what: impl Display) -> Result<Vec<u8>, DxfError> {
+    let mut bytes = try_vec_with_capacity(len, what)?;
+    bytes.resize(len, 0);
+    Ok(bytes)
+}
+
+/// Allocates an empty `Vec<u8>` with the requested capacity, reporting an allocation
+/// failure as an error instead of aborting.
+pub(crate) fn try_vec_with_capacity(
+    capacity: usize,
+    what: impl Display,
+) -> Result<Vec<u8>, DxfError> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|error| {
+        DxfError::Custom(format!(
+            "failed to allocate {capacity} bytes for {what}: {error}"
+        ))
+    })?;
+    Ok(bytes)
+}
 
 /// Converts a size read from a DWG file to `usize`. Negative values and values outside
 /// `accepted` are rejected with an error naming the field and the accepted range.
