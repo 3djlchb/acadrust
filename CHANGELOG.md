@@ -2,6 +2,12 @@
 
 ### Unreleased
 
+- **MTEXT paragraph end properties** - `MTextParagraph::end_properties` holds
+  the span properties in effect where a paragraph ends: at its break (`\P`,
+  `\N`, `^J`, a raw line feed, `\p;`) or at the end of the text. An empty
+  paragraph has no spans, so this is the only record of the height, font and
+  colour its line is set in; groups closed before the break do not apply to
+  it (issue #229).
 - **DWG allocation budget** - `DwgReadOptions::max_decompressed_bytes` caps the
   total decompressed bytes one read allocates across sections and system pages,
   so a small crafted file fails with a `DxfError` instead of exhausting memory.
