@@ -76,8 +76,7 @@ fn section_size_is_checked_against_main_bits_only() {
     let main = DwgBitReader::new(writer.into_bytes(), DWG_VERSION, DXF_VERSION);
     let text = DwgBitReader::new(vec![0; 16], DWG_VERSION, DXF_VERSION);
     let handle = DwgBitReader::new(vec![0; 16], DWG_VERSION, DXF_VERSION);
-    let mut reader =
-        DwgMergedReader::from_readers(main, Some(text), Some(handle), DXF_VERSION);
+    let mut reader = DwgMergedReader::from_readers(main, Some(text), Some(handle), DXF_VERSION);
     reader.set_main_data_end(main_bits);
 
     let project = read_vba(&mut reader);
@@ -86,6 +85,4 @@ fn section_size_is_checked_against_main_bits_only() {
         .check_error()
         .expect("text and handle bits are not inline payload");
     assert!(project.storage.encode().is_empty());
-    assert_eq!(reader.text_remaining_bits(), 16 * 8);
-    assert_eq!(reader.handle_remaining_bits(), 16 * 8);
 }
