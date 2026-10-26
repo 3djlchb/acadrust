@@ -122,14 +122,20 @@ impl MTextParser {
         // starts a new span), `%%d`/`%%p`/`%%c` and `%%%%` resolve to symbols,
         // `%%nnn` is a decimal character code, and `\P`/`\p` break paragraphs.
         // Underscoring/overscoring turn off automatically at the string end.
+        let stroke_properties = |u: bool, o: bool| {
+            let mut props = SpanProperties::default();
+            props.set_underline(u);
+            props.set_overline(o);
+            props
+        };
         let flush = |para: &mut MTextParagraph, text: &mut String, u: bool, o: bool| {
             if text.is_empty() {
                 return;
             }
-            let mut props = SpanProperties::default();
-            props.set_underline(u);
-            props.set_overline(o);
-            para.push_span(MTextSpan::new(std::mem::take(text), props));
+            para.push_span(MTextSpan::new(
+                std::mem::take(text),
+                stroke_properties(u, o),
+            ));
         };
 
         let n = self.chars.len();
@@ -204,6 +210,9 @@ impl MTextParser {
                 && (self.chars[self.pos + 1] == 'P' || self.chars[self.pos + 1] == 'p')
             {
                 flush(&mut para, &mut text, underline, overline);
+                // `%%u`/`%%o` carry across the break; at the string end they
+                // turn off, so the last paragraph keeps the default.
+                para.end_properties = stroke_properties(underline, overline);
                 self.document.push_paragraph(std::mem::take(&mut para));
                 self.pos += 2;
                 continue;
