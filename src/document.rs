@@ -650,6 +650,8 @@ pub struct HeaderVariables {
     pub paper_ucs_ortho_ref: Handle,
     /// PUCSORTHOVIEW - Paper space UCS orthographic view type
     pub paper_ucs_ortho_view: i16,
+    /// PUCSBASE - name of the UCS the paper space orthographic origins are relative to
+    pub paper_ucs_base: String,
 
     // ==================== Handles/References ====================
     /// HANDSEED - Next available handle
@@ -1071,6 +1073,7 @@ impl Default for HeaderVariables {
             ucs_ortho_view: 0,
             paper_ucs_ortho_ref: Handle::NULL,
             paper_ucs_ortho_view: 0,
+            paper_ucs_base: String::new(),
 
             // Handles
             handle_seed: 1,
