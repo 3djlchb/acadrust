@@ -1863,6 +1863,15 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_paragraph_end_properties_carry_the_open_strokes() {
+        // `%%u` is still in effect at the `\P`, so the first paragraph ends
+        // underlined; at the string end underscoring turns off.
+        let doc = parse_plain_text("%%uA\\PB");
+        assert!(doc.paragraphs[0].end_properties.stroke.underline());
+        assert_eq!(doc.paragraphs[1].end_properties, SpanProperties::default());
+    }
+
+    #[test]
     fn a_unicode_escape_takes_exactly_four_hex_digits() {
         assert_eq!(parse_mtext(r"20\U+00B0C", false).to_plain_text(), "20°C");
         assert_eq!(parse_mtext(r"\U+00B12", false).to_plain_text(), "±2");
