@@ -250,4 +250,81 @@ mod tests {
         let info = header_info(false, section(8, 0xF800, 300, pages), HashMap::new());
         rejected(&info, "page total 1258291200 is outside");
     }
+
+    /// Reading the section under `budget` must fail with "budget" in strict and failsafe mode.
+    fn rejected_by_budget(info: &DwgFileHeaderInfo, section_name: &str, budget: usize) {
+        for options in [DwgReadOptions::default(), DwgReadOptions::failsafe()] {
+            let failsafe = options.failsafe;
+            let mut reader = DwgReader::from_stream_with_options(
+                Cursor::new(Vec::new()),
+                options.with_max_decompressed_bytes(budget),
+            );
+            let message = match reader.get_section_buffer(section_name, info) {
+                Err(error) => error.to_string(),
+                Ok(bytes) => panic!("failsafe={failsafe}: read {} bytes", bytes.len()),
+            };
+            assert!(message.contains("budget"), "failsafe={failsafe}: {message}");
+        }
+    }
+
+    #[test]
+    fn ac18_section_respects_the_total_decompressed_budget() {
+        let info = header_info(true, section(8, 8, 1, vec![page(7, 8, 0)]), HashMap::new());
+        rejected_by_budget(&info, "AcDb:Header", 7);
+    }
+
+    #[test]
+    fn ac21_section_respects_the_total_decompressed_budget() {
+        let info = header_info(false, section(8, 0xF800, 0, vec![]), HashMap::new());
+        rejected_by_budget(&info, "AcDb:Header", 7);
+    }
+
+    #[test]
+    fn a_section_that_fits_the_budget_is_read() {
+        let info = header_info(true, section(8, 8, 1, vec![page(7, 8, 0)]), HashMap::new());
+        let mut reader = DwgReader::from_stream_with_options(
+            Cursor::new(Vec::new()),
+            DwgReadOptions::failsafe().with_max_decompressed_bytes(8),
+        );
+        assert_eq!(
+            reader
+                .get_section_buffer("AcDb:Header", &info)
+                .unwrap()
+                .len(),
+            8
+        );
+    }
+
+    #[test]
+    fn decompressed_budget_is_shared_by_all_sections() {
+        let mut info = header_info(true, section(8, 8, 1, vec![page(7, 8, 0)]), HashMap::new());
+        let mut classes = section(8, 8, 1, vec![page(7, 8, 0)]);
+        classes.name = "AcDb:Classes".to_owned();
+        info.section_descriptors.push(classes);
+
+        let mut reader = DwgReader::from_stream_with_options(
+            Cursor::new(Vec::new()),
+            DwgReadOptions::failsafe().with_max_decompressed_bytes(10),
+        );
+        assert_eq!(
+            reader
+                .get_section_buffer("AcDb:Header", &info)
+                .unwrap()
+                .len(),
+            8
+        );
+        let message = reader
+            .get_section_buffer("AcDb:Classes", &info)
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("budget"), "{message}");
+    }
+
+    #[test]
+    fn allocation_failures_are_reported_as_errors() {
+        let message = try_zeroed_vec(usize::MAX, "test buffer")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains("allocate"), "{message}");
+    }
 }
