@@ -107,3 +107,5 @@ pub(crate) fn sab_fingerprint<'a>(
     fingerprint
 }
 pub use file_headers::{DwgFileHeaderWriterAC15, DwgFileHeaderWriterAC18};
+
+mod table_format;

@@ -251,6 +251,18 @@ bitflags! {
     }
 }
 
+impl CellEdgeFlags {
+    /// Convert the file's grid-line indexes (top/inside/bottom/left/inside/right)
+    /// to the public cell-edge selection mask (top/right/bottom/left/inside/inside).
+    pub(crate) fn from_grid_mask(mask: u32) -> Self {
+        Self::from_bits_retain((mask & !(2 | 32)) | ((mask & 2) << 4) | ((mask & 32) >> 4))
+    }
+
+    pub(crate) fn grid_mask(self) -> u32 {
+        Self::from_grid_mask(self.bits()).bits()
+    }
+}
+
 bitflags! {
     /// Cell state flags.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

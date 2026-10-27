@@ -3621,16 +3621,14 @@ fn read_cell_style(reader: &mut DwgMergedReader) -> Option<CellStyle> {
     let nborders = safe_count(reader.read_bit_long(), reader);
     for _ in 0..nborders {
         let edge = reader.read_bit_long() as u32;
-        if matches!(edge, 1 | 2 | 4 | 8 | 0x10 | 0x20) {
-            style.applied_border_edges |= CellEdgeFlags::from_bits_retain(edge);
-            let border = read_border(reader);
-            match edge {
-                1 => style.top_border = border,
-                2 => style.right_border = border,
-                4 => style.bottom_border = border,
-                8 => style.left_border = border,
-                _ => style.additional_borders.push((edge, border)),
-            }
+        style.applied_border_edges |= CellEdgeFlags::from_grid_mask(edge);
+        let border = read_border(reader);
+        match edge {
+            1 => style.top_border = border,
+            32 => style.right_border = border,
+            4 => style.bottom_border = border,
+            8 => style.left_border = border,
+            _ => style.additional_borders.push((edge, border)),
         }
     }
     Some(style)

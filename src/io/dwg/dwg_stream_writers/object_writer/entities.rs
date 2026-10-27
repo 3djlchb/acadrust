@@ -3522,7 +3522,7 @@ impl<'a> DwgObjectWriter<'a> {
             (CellEdgeFlags::LEFT, &style.left_border),
         ] {
             if style.applied_border_edges.contains(edge) {
-                borders.push((edge.bits(), border));
+                borders.push((edge.grid_mask(), border));
             }
         }
         borders.extend(
@@ -3967,6 +3967,8 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_table(&mut self, e: &table::Table) {
+        let formatted = crate::io::dwg::table_format::with_companion_format(e, self.document);
+        let e = formatted.as_ref();
         let type_code = self.class_type_code("ACAD_TABLE", common::OBJ_TABLE);
         self.entity_preamble(type_code, &e.common);
 
