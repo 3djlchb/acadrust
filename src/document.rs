@@ -6346,6 +6346,36 @@ impl CadDocument {
         self.resolve_book_colors();
         self.resolve_xrecord_names();
         self.resolve_xrecord_backed_properties();
+        if let Some(s) = self
+            .text_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_text_style_name))
+        {
+            let is_default_name = self.header.current_text_style_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_text_style_handle.is_null()
+                && self
+                    .text_styles
+                    .iter()
+                    .any(|t| t.handle == self.header.current_text_style_handle && !t.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_text_style_handle = s.handle;
+            }
+        }
+        if let Some(s) = self
+            .dim_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_dimstyle_name))
+        {
+            let is_default_name = self.header.current_dimstyle_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_dimstyle_handle.is_null()
+                && self
+                    .dim_styles
+                    .iter()
+                    .any(|d| d.handle == self.header.current_dimstyle_handle && !d.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_dimstyle_handle = s.handle;
+            }
+        }
         self.header.handle_seed = self.header.handle_seed.max(self.next_handle);
     }
 
