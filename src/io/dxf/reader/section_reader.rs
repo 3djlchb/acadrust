@@ -11599,17 +11599,25 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read an MTEXT R2018+ embedded object (code 101 block), extracting the
-    /// column layout. The MTEXT column data lives here rather than in the
-    /// entity's own codes; other embedded-object codes are consumed and
-    /// ignored. Stops at the next 0-code or the XDATA (>=1000) region.
-    fn read_mtext_embedded_object(&mut self) -> Result<crate::entities::mtext::MTextColumnData> {
+    /// column layout and the attachment point of that layout (group 70). The
+    /// MTEXT column data lives here rather than in the entity's own codes;
+    /// other embedded-object codes are consumed and ignored. Stops at the
+    /// next 0-code or the XDATA (>=1000) region.
+    fn read_mtext_embedded_object(
+        &mut self,
+    ) -> Result<(
+        crate::entities::mtext::MTextColumnData,
+        Option<crate::entities::mtext::AttachmentPoint>,
+    )> {
         let mut col = crate::entities::mtext::MTextColumnData::new();
+        let mut attachment = None;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 || pair.code >= 1000 {
                 self.reader.push_back(pair);
                 break;
             }
             match pair.code {
+                70 => attachment = pair.as_i16().map(Into::into),
                 71 => {
                     if let Some(v) = pair.as_i16() {
                         col.column_type = v;
@@ -11648,7 +11656,7 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
-        Ok(col)
+        Ok((col, attachment))
     }
 
     /// Try to read common entity codes, including visual-style handle 348.
@@ -13615,9 +13623,15 @@ impl<'a> SectionReader<'a> {
                 }
                 // R2018+ column/layout companion — its codes shadow the
                 // entity's own, so it must not fall through this match. The
-                // embedded object carries the MTEXT column layout.
+                // embedded object carries the MTEXT column layout, and its
+                // attachment point is the one CAD applications render from
+                // (ZWCAD writes a different value in group 71 for such texts).
                 101 => {
-                    mtext.column_data = self.read_mtext_embedded_object()?;
+                    let (columns, attachment) = self.read_mtext_embedded_object()?;
+                    mtext.column_data = columns;
+                    if let Some(attachment) = attachment {
+                        mtext.attachment_point = attachment;
+                    }
                     reading_columns = false;
                 }
                 _ => {

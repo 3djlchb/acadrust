@@ -27,6 +27,23 @@ pub enum AttachmentPoint {
     BottomRight = 9,
 }
 
+impl From<i16> for AttachmentPoint {
+    /// DXF group 71 / embedded object group 70; unknown codes are top left.
+    fn from(code: i16) -> Self {
+        match code {
+            2 => Self::TopCenter,
+            3 => Self::TopRight,
+            4 => Self::MiddleLeft,
+            5 => Self::MiddleCenter,
+            6 => Self::MiddleRight,
+            7 => Self::BottomLeft,
+            8 => Self::BottomCenter,
+            9 => Self::BottomRight,
+            _ => Self::TopLeft,
+        }
+    }
+}
+
 /// Drawing direction for MText
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
