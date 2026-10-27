@@ -1327,7 +1327,9 @@ fn prepare_header(
         }
     }
 
-    // dim_text_style_handle — validate against text styles
+    // dim_text_style_handle — DXF names the style, a DWG stores its handle.
+    // A null or dangling handle selects the style the name gives; when that
+    // names nothing, fall back to Standard.
     {
         let dts_valid = !h.dim_text_style_handle.is_null()
             && document
@@ -1337,7 +1339,8 @@ fn prepare_header(
         if !dts_valid {
             h.dim_text_style_handle = document
                 .text_styles
-                .get("Standard")
+                .get(&h.dim_text_style_name)
+                .or_else(|| document.text_styles.get("Standard"))
                 .map(|s| s.handle)
                 .unwrap_or(Handle::NULL);
         }
@@ -1356,20 +1359,29 @@ fn prepare_header(
         }
     }
 
-    // ── Validate dim linetype handles against actual linetypes ──
-    // These can become corrupt during header read/write due to stream alignment.
+    // ── Resolve and validate dim linetype handles against actual linetypes ──
+    // DXF names them and a DWG stores their handles, so a null or dangling
+    // handle takes the handle of the linetype the name gives.
     {
-        let valid_lt = |h: Handle| -> bool {
-            h.is_null() || document.line_types.iter().any(|lt| lt.handle == h)
-        };
-        if !valid_lt(h.dim_linetype_handle) {
-            h.dim_linetype_handle = Handle::NULL;
-        }
-        if !valid_lt(h.dim_linetype1_handle) {
-            h.dim_linetype1_handle = Handle::NULL;
-        }
-        if !valid_lt(h.dim_linetype2_handle) {
-            h.dim_linetype2_handle = Handle::NULL;
+        let names = [
+            h.dim_linetype_name.clone(),
+            h.dim_linetype1_name.clone(),
+            h.dim_linetype2_name.clone(),
+        ];
+        for (handle, name) in [
+            (&mut h.dim_linetype_handle, &names[0]),
+            (&mut h.dim_linetype1_handle, &names[1]),
+            (&mut h.dim_linetype2_handle, &names[2]),
+        ] {
+            let valid =
+                !handle.is_null() && document.line_types.iter().any(|lt| lt.handle == *handle);
+            if !valid {
+                *handle = document
+                    .line_types
+                    .get(name)
+                    .map(|lt| lt.handle)
+                    .unwrap_or(Handle::NULL);
+            }
         }
     }
 

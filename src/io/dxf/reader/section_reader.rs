@@ -3098,21 +3098,27 @@ impl<'a> SectionReader<'a> {
                 "$DIMTXSTY" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_text_style_name = p.value_string.clone();
+                        // A DXF header names the style; the handle is only a
+                        // DWG concept, so the writer resolves it from the name.
+                        hdr.dim_text_style_handle = Handle::NULL;
                     }
                 }
                 "$DIMLTYPE" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_linetype_name = p.value_string.clone();
+                        hdr.dim_linetype_handle = Handle::NULL;
                     }
                 }
                 "$DIMLTEX1" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_linetype1_name = p.value_string.clone();
+                        hdr.dim_linetype1_handle = Handle::NULL;
                     }
                 }
                 "$DIMLTEX2" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_linetype2_name = p.value_string.clone();
+                        hdr.dim_linetype2_handle = Handle::NULL;
                     }
                 }
                 "$DIMBLK" => {

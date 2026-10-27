@@ -629,6 +629,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         })?;
         self.write_header_variable("$DIMPOST", |w| w.write_string(1, &hdr.dim_post))?;
         self.write_header_variable("$DIMAPOST", |w| w.write_string(1, &hdr.dim_alt_post))?;
+        // A DXF header names these; a DWG stores their handles.
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.write_header_variable("$DIMTXSTY", |w| {
+                w.write_string(7, &hdr.dim_text_style_name)
+            })?;
+            self.write_header_variable("$DIMLTYPE", |w| w.write_string(6, &hdr.dim_linetype_name))?;
+            self.write_header_variable("$DIMLTEX1", |w| {
+                w.write_string(6, &hdr.dim_linetype1_name)
+            })?;
+            self.write_header_variable("$DIMLTEX2", |w| {
+                w.write_string(6, &hdr.dim_linetype2_name)
+            })?;
+        }
         for (variable, stored, handle) in [
             (
                 "$DIMBLK",
