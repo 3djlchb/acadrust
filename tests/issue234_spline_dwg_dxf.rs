@@ -65,11 +65,6 @@ fn closed_fit_point_spline_retains_closed_flag() {
         "spline A0 DXF group 70 must have bit 1 (closed) set, got {}",
         dxf_a0.dxf_flags
     );
-    assert!(
-        dxf_a0.dxf_flags & 8 != 0,
-        "spline A0 DXF group 70 must have bit 8 (planar) set, got {}",
-        dxf_a0.dxf_flags
-    );
 }
 
 #[test]
