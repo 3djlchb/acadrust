@@ -1168,7 +1168,10 @@ impl<R: Read + Seek> DwgReader<R> {
         // A decoder bug must reach the caller as `DxfError`, including when
         // failsafe is on. Record-level failures are handled inside the builder.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read_drawing(visit))) {
-            Ok(result) => result,
+            Ok(result) => result.map(|mut outcome| {
+                current_style_names(&mut outcome.document);
+                outcome
+            }),
             Err(payload) => Err(DxfError::Parse(format!(
                 "DWG reader failed: {}",
                 crate::io::dwg::unwind_message(payload.as_ref())
@@ -3871,5 +3874,19 @@ mod section_recovery_tests {
         assert!(reader
             .get_section_buffer("AcDb:Header", &ac18_info(7))
             .is_err());
+    }
+}
+
+/// The current text and dimension styles' names from their handles: a DWG stores only the handles, and the
+/// names stayed "Standard", so a drawing read from DWG lost its current styles (and wrote them as Standard).
+/// Ported from CADCraft's DWG bridge (storytold/cadcraft #1051; MIT OR Apache-2.0).
+fn current_style_names(doc: &mut crate::document::CadDocument) {
+    let h = doc.header.current_text_style_handle;
+    if let Some(s) = doc.text_styles.iter().find(|s| !h.is_null() && s.handle == h) {
+        doc.header.current_text_style_name = s.name.clone();
+    }
+    let h = doc.header.current_dimstyle_handle;
+    if let Some(s) = doc.dim_styles.iter().find(|s| !h.is_null() && s.handle == h) {
+        doc.header.current_dimstyle_name = s.name.clone();
     }
 }
