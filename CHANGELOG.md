@@ -1,7 +1,65 @@
 ## Changelog
 
-### Unreleased
+### 0.6.8
 
+- **Symbol names (issue #237)** - Names are compared as AutoCAD compares
+  them: each letter upper-cases to one letter, and a non-ASCII letter never
+  folds into an ASCII one. `Yazı` and `YAZI`, or `Straße` and `STRASSE`, stay
+  distinct table entries.
+- **SPLINE from DWG to DXF (issue #234)** - A DWG to DXF save keeps the
+  SPLINE closed flag and clamps periodic NURBS control points to valid
+  parameters.
+- **Current styles in DWG writes (issue #227)** - A DWG save keeps the
+  current text and dimension styles (`$TEXTSTYLE`, `$DIMSTYLE`) by resolving
+  their names to table handles.
+- **Dimension names (issue #215)** - The dimension text style and linetype
+  names are written and resolved from their names rather than dropped.
+- **BLOCKPROPERTIESTABLE (issue #183)** - Group 93 is read as a value
+  followed by three flags, not as a flag count.
+- **VBA_PROJECT (issue #184)** - The section's BL is treated as its size, so
+  files that previously failed the strict read load.
+- **Header variables (issues #196, #211, and #222)** - The DWG reader keeps
+  `ACADMAINTVER`, `DIMTXTDIRECTION`, `DIMALTMZF`/`DIMALTMZS`,
+  `DIMMZF`/`DIMMZS`, `CSHADOW`, and the UCS and paper-space UCS orthographic
+  origins. `UNITMODE` and `DIMUNIT` round-trip, the R13 `DIMFIT` stays apart
+  from `DIMATFIT`, and the DXF reader also keeps `$PELLIPSE` and
+  `$PUCSBASE`.
+- **UNITMODE (issue #220)** - `header.unit_mode` is the single source for
+  `$UNITMODE`, so a DXF write no longer uses a second value.
+- **Dimension header names (issue #217)** - `DIMTXSTY`, `DIMLTYPE`,
+  `DIMLTEX1`, and `DIMLTEX2` are kept from both the DWG and DXF headers,
+  defaulting to `Standard` and `ByBlock`.
+- **Code pages and CIF escapes (issues #191, #209, #213, and #216)** - A
+  pre-R2007 CIF escape is decoded only when the code page cannot hold the
+  character, and a stand-in code page row does not gate it. In R2007+ UTF-8
+  and UTF-16 text a CIF escape is content. Characters are escaped only when
+  the code page encodes them onto a different one, and Shift_JIS yen is
+  written as a bare backslash.
+- **MTEXT escapes (issue #212)** - `\U+XXXX` takes exactly four hex digits,
+  so `20\U+00B0C` is `20`, U+00B0, then `C`.
+- **Image definition reactors (issue #204)** - `IMAGEDEF` and
+  `RASTERVARIABLES` write their owner dictionary and reactor handles, so
+  AutoCAD's External References palette no longer lists images as
+  unreferenced after a DXF round trip.
+- **Unknown DWG code pages (issue #202)** - An unknown code page index still
+  falls back to ANSI_1252, but the read now reports a warning naming it.
+- **Same-version saves (issue #199)** - A DWG save keeps an object whose
+  class is not registered instead of dropping it.
+- **MTEXT columns (issue #198)** - For R2007 to R2013 the column layout is
+  written as ACAD extended data instead of group 50, so the rotation no
+  longer reads back as a column height. Older versions write no columns, and
+  the reader restores `column_data`.
+- **Legacy TABLE cells (issue #193)** - Below R2007 an empty text cell keeps
+  an empty string, the text follows the value handle that is written, and
+  R2000 colors use the full color record.
+- **Binary DXF integers (issue #190)** - An integer that does not fit its
+  group's width is an error instead of being silently truncated.
+- **Clockwise HATCH arcs (issue #159)** - A clockwise arc edge is stored with
+  complementary angles in DXF, so a round trip keeps its direction.
+- **DWG header current names (issue #186)** - The current text style,
+  linetype, and dimension style resolve to names from their handles.
+- **FreeBSD aarch64** - `sysctlbyname`'s name parameter uses `c_char`, and CI
+  checks both FreeBSD targets.
 - **MTEXT paragraph end properties** - `MTextParagraph::end_properties` holds
   the span properties in effect where a paragraph ends: at its break (`\P`,
   `\N`, `^J`, a raw line feed, `\p;`) or at the end of the text. An empty
