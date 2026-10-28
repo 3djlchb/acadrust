@@ -140,9 +140,11 @@ pub struct CircularArcEdge {
     pub center: Vector2,
     /// Radius
     pub radius: f64,
-    /// Start angle in radians
+    /// Start angle in radians. A clockwise edge runs clockwise from
+    /// `-start_angle` to `-end_angle`, so the clockwise arc from 90° to 270°
+    /// is stored as 270° and 90°.
     pub start_angle: f64,
-    /// End angle in radians
+    /// End angle in radians. See [`Self::start_angle`].
     pub end_angle: f64,
     /// Counter-clockwise flag
     pub counter_clockwise: bool,

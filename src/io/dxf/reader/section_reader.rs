@@ -1610,6 +1610,7 @@ impl<'a> SectionReader<'a> {
         // A $CUSTOMPROPERTYTAG waits for its $CUSTOMPROPERTY value.
         let mut custom_value_pending = false;
         let mut code_page_seen = false;
+        let mut dimatfit_seen = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDSEC" {
@@ -1654,7 +1655,10 @@ impl<'a> SectionReader<'a> {
                             "$VIEWMODE" => state.view_mode = value,
                             "$FLATLAND" => state.flatland = value,
                             "$UCSICON" => state.ucs_icon = value,
-                            "$UNITMODE" => state.unit_mode = value,
+                            "$UNITMODE" => {
+                                state.unit_mode = value;
+                                hdr.unit_mode = value;
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -1688,7 +1692,9 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 "$ACADMAINTVER" => {
-                    self.reader.read_pair()?;
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_int()) {
+                        hdr.acad_maintenance_version = v as i32;
+                    }
                 }
                 "$REQUIREDVERSIONS" => {
                     if let Some(p) = self.reader.read_pair()? {
@@ -3043,11 +3049,25 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
-                "$DIMATFIT" | "$DIMFIT" => {
-                    if let Some(p) = self.reader.read_pair()? {
-                        if let Some(v) = p.as_i16() {
+                "$DIMATFIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_fit = v;
+                        dimatfit_seen = true;
+                    }
+                }
+                // R13/R14 files only have $DIMFIT, so it feeds dim_fit until a
+                // $DIMATFIT says otherwise.
+                "$DIMFIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_fit_r13 = v;
+                        if !dimatfit_seen {
                             hdr.dim_fit = v;
                         }
+                    }
+                }
+                "$DIMUNIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_unit = v;
                     }
                 }
                 "$DIMUPT" => {
@@ -3063,6 +3083,32 @@ impl<'a> SectionReader<'a> {
                 "$DIMAPOST" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_alt_post = p.value_string.clone();
+                    }
+                }
+                "$DIMTXSTY" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_text_style_name = p.value_string.clone();
+                        // A DXF header names the style; the handle is only a
+                        // DWG concept, so the writer resolves it from the name.
+                        hdr.dim_text_style_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTYPE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype_name = p.value_string.clone();
+                        hdr.dim_linetype_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTEX1" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype1_name = p.value_string.clone();
+                        hdr.dim_linetype1_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTEX2" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype2_name = p.value_string.clone();
+                        hdr.dim_linetype2_handle = Handle::NULL;
                     }
                 }
                 "$DIMBLK" => {
@@ -3202,6 +3248,93 @@ impl<'a> SectionReader<'a> {
                 }
                 "$PUCSYDIR" => {
                     self.read_header_point3(&mut hdr.paper_space_ucs_y_axis)?;
+                }
+                "$UCSORGTOP" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[0])?;
+                }
+                "$PUCSORGTOP" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[0])?;
+                }
+                "$UCSORGBOTTOM" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[1])?;
+                }
+                "$PUCSORGBOTTOM" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[1])?;
+                }
+                "$UCSORGLEFT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[2])?;
+                }
+                "$PUCSORGLEFT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[2])?;
+                }
+                "$UCSORGRIGHT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[3])?;
+                }
+                "$PUCSORGRIGHT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[3])?;
+                }
+                "$UCSORGFRONT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[4])?;
+                }
+                "$PUCSORGFRONT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[4])?;
+                }
+                "$UCSORGBACK" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[5])?;
+                }
+                "$PUCSORGBACK" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[5])?;
+                }
+                "$PELLIPSE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        // An int in some versions of AutoCAD, a bool in others.
+                        if let Some(v) = p.as_i16() {
+                            hdr.create_ellipse_as_polyline = v != 0;
+                        }
+                    }
+                }
+                "$PUCSBASE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.paper_ucs_base = p.value_string.clone();
+                    }
+                }
+                "$DIMTXTDIRECTION" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_i16() {
+                            hdr.dim_text_direction = v != 0;
+                        }
+                    }
+                }
+                "$DIMALTMZF" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_double() {
+                            hdr.dim_alt_mzf = v;
+                        }
+                    }
+                }
+                "$DIMALTMZS" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_alt_mzs = p.value_string.clone();
+                    }
+                }
+                "$DIMMZF" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_double() {
+                            hdr.dim_mzf = v;
+                        }
+                    }
+                }
+                "$DIMMZS" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_mzs = p.value_string.clone();
+                    }
+                }
+                "$CSHADOW" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_i16() {
+                            hdr.cast_shadow = v;
+                        }
+                    }
                 }
                 "$UCSORTHOVIEW" => {
                     if let Some(p) = self.reader.read_pair()? {
@@ -11472,17 +11605,25 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read an MTEXT R2018+ embedded object (code 101 block), extracting the
-    /// column layout. The MTEXT column data lives here rather than in the
-    /// entity's own codes; other embedded-object codes are consumed and
-    /// ignored. Stops at the next 0-code or the XDATA (>=1000) region.
-    fn read_mtext_embedded_object(&mut self) -> Result<crate::entities::mtext::MTextColumnData> {
+    /// column layout and the attachment point of that layout (group 70). The
+    /// MTEXT column data lives here rather than in the entity's own codes;
+    /// other embedded-object codes are consumed and ignored. Stops at the
+    /// next 0-code or the XDATA (>=1000) region.
+    fn read_mtext_embedded_object(
+        &mut self,
+    ) -> Result<(
+        crate::entities::mtext::MTextColumnData,
+        Option<crate::entities::mtext::AttachmentPoint>,
+    )> {
         let mut col = crate::entities::mtext::MTextColumnData::new();
+        let mut attachment = None;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 || pair.code >= 1000 {
                 self.reader.push_back(pair);
                 break;
             }
             match pair.code {
+                70 => attachment = pair.as_i16().map(Into::into),
                 71 => {
                     if let Some(v) = pair.as_i16() {
                         col.column_type = v;
@@ -11521,7 +11662,7 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
-        Ok(col)
+        Ok((col, attachment))
     }
 
     /// Try to read common entity codes, including visual-style handle 348.
@@ -13488,9 +13629,15 @@ impl<'a> SectionReader<'a> {
                 }
                 // R2018+ column/layout companion — its codes shadow the
                 // entity's own, so it must not fall through this match. The
-                // embedded object carries the MTEXT column layout.
+                // embedded object carries the MTEXT column layout, and its
+                // attachment point is the one CAD applications render from
+                // (ZWCAD writes a different value in group 71 for such texts).
                 101 => {
-                    mtext.column_data = self.read_mtext_embedded_object()?;
+                    let (columns, attachment) = self.read_mtext_embedded_object()?;
+                    mtext.column_data = columns;
+                    if let Some(attachment) = attachment {
+                        mtext.attachment_point = attachment;
+                    }
                     reading_columns = false;
                 }
                 _ => {
@@ -13517,6 +13664,13 @@ impl<'a> SectionReader<'a> {
                 * Vector3::new(rotation.cos(), rotation.sin(), 0.0);
             mtext.rotation = direction.y.atan2(direction.x);
             mtext.dwg_x_direction = Some(direction);
+        }
+
+        // R2007 to R2013 keep the column layout in ACAD extended data.
+        if mtext.column_data.column_type == 0 {
+            if let Some(columns) = mtext_columns_from_xdata(&mtext.common.extended_data) {
+                mtext.column_data = columns;
+            }
         }
 
         Ok(Some(mtext))
@@ -22631,4 +22785,49 @@ mod tests {
             ]
         );
     }
+}
+
+/// The column layout in an MTEXT's ACAD extended data, between
+/// `ACAD_MTEXT_COLUMN_INFO_BEGIN` and `ACAD_MTEXT_COLUMN_INFO_END`: pairs of a
+/// group code and its value, where code 50 is followed by the height count and
+/// then that many heights.
+fn mtext_columns_from_xdata(
+    xdata: &crate::xdata::ExtendedData,
+) -> Option<crate::entities::mtext::MTextColumnData> {
+    use crate::xdata::XDataValue;
+
+    let record = xdata.records().iter().find(|r| {
+        r.application_name == "ACAD"
+            && r.values
+                .iter()
+                .any(|v| matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_COLUMN_INFO_BEGIN"))
+    })?;
+    let mut values = record
+        .values
+        .iter()
+        .skip_while(|v| !matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_COLUMN_INFO_BEGIN"))
+        .skip(1);
+    let mut columns = crate::entities::mtext::MTextColumnData::new();
+    while let Some(code) = values.next() {
+        let XDataValue::Integer16(code) = code else {
+            break; // the END marker, or something this block does not hold
+        };
+        match (code, values.next()?) {
+            (75, XDataValue::Integer16(v)) => columns.column_type = *v,
+            (79, XDataValue::Integer16(v)) => columns.auto_height = *v != 0,
+            (76, XDataValue::Integer16(v)) => columns.column_count = i32::from(*v),
+            (78, XDataValue::Integer16(v)) => columns.flow_reversed = *v != 0,
+            (48, XDataValue::Real(v)) => columns.width = *v,
+            (49, XDataValue::Real(v)) => columns.gutter = *v,
+            (50, XDataValue::Integer16(v)) => {
+                for _ in 0..(*v).max(0) {
+                    if let Some(XDataValue::Real(h)) = values.next() {
+                        columns.heights.push(*h);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (columns.column_type != 0).then_some(columns)
 }

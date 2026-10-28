@@ -171,6 +171,11 @@ pub struct HeaderVariables {
     // ==================== Version-specific Flags ====================
     /// REQUIREDVERSIONS (R2013+) - Bit coded required versions
     pub required_versions: i64,
+    /// `$ACADMAINTVER` as a DXF header carries it (AutoCAD's maintenance build
+    /// number, for example 329 for an AC1032 save). 0 when the file has none, as a
+    /// DWG's header does not. Not the DWG file-header byte that
+    /// [`CadDocument::maintenance_version`] holds, which is a different quantity.
+    pub acad_maintenance_version: i32,
 
     // ==================== Drawing Mode Flags ====================
     /// DIMASO - Associates dimensions with geometry
@@ -331,6 +336,22 @@ pub struct HeaderVariables {
     pub dim_text_fill: i16,
     /// DIMTFILLCLR - Dimension text background fill color
     pub dim_text_fill_color: Color,
+    /// DIMTXTDIRECTION - Dimension text reads right to left
+    pub dim_text_direction: bool,
+    /// DIMALTMZF - Alternate units zero suppression scale factor
+    pub dim_alt_mzf: f64,
+    /// DIMALTMZS - Alternate units zero suppression text
+    pub dim_alt_mzs: String,
+    /// DIMMZF - Zero suppression scale factor
+    pub dim_mzf: f64,
+    /// DIMMZS - Zero suppression text
+    pub dim_mzs: String,
+    /// CSHADOW - Shadow casting mode of new objects
+    pub cast_shadow: i16,
+    /// UCSORGTOP, BOTTOM, LEFT, RIGHT, FRONT, BACK
+    pub ucs_ortho_origins: [Vector3; 6],
+    /// PUCSORGTOP, BOTTOM, LEFT, RIGHT, FRONT, BACK
+    pub paper_ucs_ortho_origins: [Vector3; 6],
     /// DIMASSOC - Dimension associativity (0=no, 1=non-exploded, 2=associative)
     pub dimension_associativity: i16,
     /// PROJECTNAME - Project name
@@ -558,6 +579,12 @@ pub struct HeaderVariables {
     pub dim_alt_tolerance_zero_tight: i16,
     /// DIMFIT/DIMATFIT - Fit options
     pub dim_fit: i16,
+    /// DIMFIT - the R13 fit variable that R2000 replaced with DIMATFIT
+    pub dim_fit_r13: i16,
+    /// DIMUNIT - the R13 unit format variable that R2000 replaced with DIMLUNIT
+    pub dim_unit: i16,
+    /// UNITMODE - display of fractional, feet and inches units
+    pub unit_mode: i16,
     /// DIMUPT - User positioned text
     pub dim_user_positioned_text: bool,
     /// DIMPOST - Primary units suffix
@@ -623,6 +650,8 @@ pub struct HeaderVariables {
     pub paper_ucs_ortho_ref: Handle,
     /// PUCSORTHOVIEW - Paper space UCS orthographic view type
     pub paper_ucs_ortho_view: i16,
+    /// PUCSBASE - name of the UCS the paper space orthographic origins are relative to
+    pub paper_ucs_base: String,
 
     // ==================== Handles/References ====================
     /// HANDSEED - Next available handle
@@ -655,6 +684,14 @@ pub struct HeaderVariables {
     pub dim_arrow_block2_handle: Handle,
     /// Leader arrow block handle (DIMLDRBLK)
     pub dim_leader_arrow_block_handle: Handle,
+    /// DIMTXSTY - name of the dimension text style
+    pub dim_text_style_name: String,
+    /// DIMLTYPE - name of the dimension line linetype
+    pub dim_linetype_name: String,
+    /// DIMLTEX1 - name of the first extension line linetype
+    pub dim_linetype1_name: String,
+    /// DIMLTEX2 - name of the second extension line linetype
+    pub dim_linetype2_name: String,
     /// DIMLWD - Dimension line weight
     pub dim_line_weight: i16,
     /// DIMLWE - Extension line weight
@@ -791,6 +828,7 @@ impl Default for HeaderVariables {
             legacy: None,
             // Version-specific flags
             required_versions: 0,
+            acad_maintenance_version: 0,
 
             // Drawing mode flags
             associate_dimensions: true,
@@ -879,6 +917,14 @@ impl Default for HeaderVariables {
             dim_jog_angle: std::f64::consts::FRAC_PI_4,
             dim_text_fill: 0,
             dim_text_fill_color: Color::ByBlock,
+            dim_text_direction: false,
+            dim_alt_mzf: 0.0,
+            dim_alt_mzs: String::new(),
+            dim_mzf: 0.0,
+            dim_mzs: String::new(),
+            cast_shadow: 0,
+            ucs_ortho_origins: [Vector3::ZERO; 6],
+            paper_ucs_ortho_origins: [Vector3::ZERO; 6],
             dimension_associativity: 2,
             project_name: String::new(),
 
@@ -996,6 +1042,9 @@ impl Default for HeaderVariables {
             dim_alt_tolerance_zero_suppression: 0,
             dim_alt_tolerance_zero_tight: 0,
             dim_fit: 3,
+            dim_fit_r13: 0,
+            dim_unit: 0,
+            unit_mode: 0,
             dim_user_positioned_text: false,
             dim_post: String::new(),
             dim_alt_post: String::new(),
@@ -1032,6 +1081,7 @@ impl Default for HeaderVariables {
             ucs_ortho_view: 0,
             paper_ucs_ortho_ref: Handle::NULL,
             paper_ucs_ortho_view: 0,
+            paper_ucs_base: String::new(),
 
             // Handles
             handle_seed: 1,
@@ -1049,6 +1099,10 @@ impl Default for HeaderVariables {
             dim_arrow_block1_handle: Handle::NULL,
             dim_arrow_block2_handle: Handle::NULL,
             dim_leader_arrow_block_handle: Handle::NULL,
+            dim_text_style_name: String::from("Standard"),
+            dim_linetype_name: String::from("ByBlock"),
+            dim_linetype1_name: String::from("ByBlock"),
+            dim_linetype2_name: String::from("ByBlock"),
             dim_line_weight: -2,     // ByBlock
             dim_ext_line_weight: -2, // ByBlock
 
@@ -4282,6 +4336,61 @@ impl CadDocument {
         raw.len() != before
     }
 
+    /// The reactors an image definition lists (DXF Reference, IMAGEDEF):
+    /// its owner dictionary, then the IMAGEDEF_REACTOR of each image that
+    /// uses it. The ones a DWG read kept win; a drawing read from DXF, or
+    /// built in code, gets them from its images. AutoCAD lists an image whose
+    /// definition has none as unreferenced.
+    pub(crate) fn image_definition_reactors(
+        &self,
+        definition: &crate::objects::ImageDefinition,
+    ) -> Vec<Handle> {
+        if let Some(saved) = self.reactors_by_handle.get(&definition.handle) {
+            return saved.clone();
+        }
+        let mut reactors = Vec::new();
+        if !definition.owner.is_null() {
+            reactors.push(definition.owner);
+        }
+        for entity in self.entities() {
+            let EntityType::RasterImage(image) = entity else {
+                continue;
+            };
+            if image.definition_handle != Some(definition.handle) {
+                continue;
+            }
+            if let Some(reactor) = image.definition_reactor_handle.filter(|r| {
+                !r.is_null()
+                    && matches!(
+                        self.objects.get(r),
+                        Some(ObjectType::ImageDefinitionReactor(_))
+                    )
+            }) {
+                if !reactors.contains(&reactor) {
+                    reactors.push(reactor);
+                }
+            }
+        }
+        reactors
+    }
+
+    /// The reactors the RASTERVARIABLES object lists: its owner, the named
+    /// object dictionary (DXF Reference, RASTERVARIABLES), unless a DWG read
+    /// kept others.
+    pub(crate) fn raster_variables_reactors(
+        &self,
+        variables: &crate::objects::RasterVariables,
+    ) -> Vec<Handle> {
+        if let Some(saved) = self.reactors_by_handle.get(&variables.handle) {
+            return saved.clone();
+        }
+        if variables.owner.is_null() {
+            Vec::new()
+        } else {
+            vec![variables.owner]
+        }
+    }
+
     pub fn extension_dictionary_handle(&self, owner: Handle) -> Option<Handle> {
         // A record without a handle owns nothing; the search below would
         // otherwise return the root dictionary, whose owner is NULL too.
@@ -6237,6 +6346,36 @@ impl CadDocument {
         self.resolve_book_colors();
         self.resolve_xrecord_names();
         self.resolve_xrecord_backed_properties();
+        if let Some(s) = self
+            .text_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_text_style_name))
+        {
+            let is_default_name = self.header.current_text_style_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_text_style_handle.is_null()
+                && self
+                    .text_styles
+                    .iter()
+                    .any(|t| t.handle == self.header.current_text_style_handle && !t.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_text_style_handle = s.handle;
+            }
+        }
+        if let Some(s) = self
+            .dim_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_dimstyle_name))
+        {
+            let is_default_name = self.header.current_dimstyle_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_dimstyle_handle.is_null()
+                && self
+                    .dim_styles
+                    .iter()
+                    .any(|d| d.handle == self.header.current_dimstyle_handle && !d.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_dimstyle_handle = s.handle;
+            }
+        }
         self.header.handle_seed = self.header.handle_seed.max(self.next_handle);
     }
 

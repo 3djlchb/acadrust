@@ -629,6 +629,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         })?;
         self.write_header_variable("$DIMPOST", |w| w.write_string(1, &hdr.dim_post))?;
         self.write_header_variable("$DIMAPOST", |w| w.write_string(1, &hdr.dim_alt_post))?;
+        // A DXF header names these; a DWG stores their handles.
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.write_header_variable("$DIMTXSTY", |w| {
+                w.write_string(7, &hdr.dim_text_style_name)
+            })?;
+            self.write_header_variable("$DIMLTYPE", |w| w.write_string(6, &hdr.dim_linetype_name))?;
+            self.write_header_variable("$DIMLTEX1", |w| {
+                w.write_string(6, &hdr.dim_linetype1_name)
+            })?;
+            self.write_header_variable("$DIMLTEX2", |w| {
+                w.write_string(6, &hdr.dim_linetype2_name)
+            })?;
+        }
         for (variable, stored, handle) in [
             (
                 "$DIMBLK",
@@ -843,9 +856,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         // === UCS ===
-        if let Some(state) = &hdr.legacy {
-            self.write_header_variable("$UNITMODE", |w| w.write_i16(70, state.unit_mode))?;
-        }
+        self.write_header_variable("$UNITMODE", |w| w.write_i16(70, hdr.unit_mode))?;
         self.write_header_variable("$UCSORG", |w| {
             let v = &hdr.model_space_ucs_origin;
             w.write_double(10, v.x)?;
@@ -2329,6 +2340,21 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                             .map(XDataValue::Handle),
                     );
                     data.add_record(record);
+                }
+                self.write_xdata(&data)?;
+            } else if let Some(record) = match entity {
+                EntityType::MText(m) => self.mtext_column_xdata(m),
+                _ => None,
+            } {
+                // One ACAD record per entity: join the columns to the one it has.
+                let mut records = entity.common().extended_data.records().to_vec();
+                match records.iter_mut().find(|r| r.application_name == "ACAD") {
+                    Some(acad) => acad.values.extend(record.values),
+                    None => records.push(record),
+                }
+                let mut data = ExtendedData::new();
+                for r in records {
+                    data.add_record(r);
                 }
                 self.write_xdata(&data)?;
             } else {
@@ -4514,32 +4540,75 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             return Ok(());
         }
-        // Standard DXF MTEXT column layout. Rotation is emitted above before
-        // the first column marker because code 50 is reused for column heights.
-        if mtext.column_data.column_type != 0 {
-            self.writer.write_i16(75, mtext.column_data.column_type)?;
-            let manual_heights =
-                mtext.column_data.column_type == 2 && !mtext.column_data.auto_height;
-            let column_count = if manual_heights {
-                mtext.column_data.heights.len().min(i16::MAX as usize) as i16
-            } else {
-                mtext.column_data.column_count.clamp(0, i16::MAX as i32) as i16
-            };
-            self.writer.write_i16(76, column_count)?;
-            self.writer
-                .write_i16(78, i16::from(mtext.column_data.flow_reversed))?;
-            self.writer
-                .write_i16(79, i16::from(mtext.column_data.auto_height))?;
-            self.writer.write_double(48, mtext.column_data.width)?;
-            self.writer.write_double(49, mtext.column_data.gutter)?;
-            if manual_heights {
-                for height in mtext.column_data.heights.iter().take(column_count as usize) {
-                    self.writer.write_double(50, *height)?;
-                }
-            }
-        }
+        // Columns are not written as group codes here: 75, 76, 78, 79, 48, 49
+        // and a 50 per column height. Group 50 is the rotation of the entity,
+        // and readers that keep the last one took a column height for it. From
+        // R2007 AutoCAD keeps the columns in ACAD extended data (see
+        // `mtext_column_xdata`); below that there are none.
         self.write_normal(mtext.normal)?;
         Ok(())
+    }
+
+    /// The ACAD extended data AutoCAD 2007 to 2013 keeps an MTEXT's columns in.
+    /// None when the entity has no columns, the version cannot carry them, or
+    /// the entity already holds a column block of its own (a drawing read from
+    /// AutoCAD keeps that one, which is written back as it is).
+    fn mtext_column_xdata(&self, mtext: &MText) -> Option<ExtendedDataRecord> {
+        let cols = &mtext.column_data;
+        if cols.column_type == 0
+            || self.dxf_version < DxfVersion::AC1021
+            || self.dxf_version >= DxfVersion::AC1032
+        {
+            return None;
+        }
+        if mtext.common.extended_data.records().iter().any(|r| {
+            r.values
+                .iter()
+                .any(|v| matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_COLUMN_INFO_BEGIN"))
+        }) {
+            return None;
+        }
+        let manual_heights = cols.column_type == 2 && !cols.auto_height;
+        let count = if manual_heights {
+            cols.heights.len()
+        } else {
+            cols.column_count.max(0) as usize
+        };
+        let i = XDataValue::Integer16;
+        let mut record = ExtendedDataRecord::new("ACAD");
+        record.values = vec![
+            XDataValue::String("ACAD_MTEXT_COLUMN_INFO_BEGIN".into()),
+            i(75),
+            i(cols.column_type),
+            i(79),
+            i(i16::from(cols.auto_height)),
+            i(76),
+            i(count.min(i16::MAX as usize) as i16),
+            i(78),
+            i(i16::from(cols.flow_reversed)),
+            i(48),
+            XDataValue::Real(cols.width),
+            i(49),
+            XDataValue::Real(cols.gutter),
+            i(50),
+            i(if manual_heights {
+                count.min(i16::MAX as usize) as i16
+            } else {
+                0
+            }),
+        ];
+        if manual_heights {
+            record.values.extend(
+                cols.heights
+                    .iter()
+                    .take(count)
+                    .map(|h| XDataValue::Real(*h)),
+            );
+        }
+        record
+            .values
+            .push(XDataValue::String("ACAD_MTEXT_COLUMN_INFO_END".into()));
+        Some(record)
     }
 
     fn write_mtext_value(&mut self, value: &str) -> Result<()> {
@@ -4598,10 +4667,17 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         let flags = crate::io::dxf::spline_flags::write(spline);
         self.writer.write_i16(70, flags)?;
 
+        let (clamped_cps, clamped_knots) = spline
+            .periodic_to_clamped_cubic()
+            .map(|(cps, kts)| (Some(cps), Some(kts)))
+            .unwrap_or((None, None));
+        let control_points = clamped_cps.as_deref().unwrap_or(&spline.control_points);
+        let knots = clamped_knots.as_deref().unwrap_or(&spline.knots);
+
         self.writer.write_i16(71, spline.degree as i16)?;
-        self.writer.write_i16(72, spline.knots.len() as i16)?;
+        self.writer.write_i16(72, knots.len() as i16)?;
         self.writer
-            .write_i16(73, spline.control_points.len() as i16)?;
+            .write_i16(73, control_points.len() as i16)?;
         self.writer.write_i16(74, spline.fit_points.len() as i16)?;
 
         // Knot / control-point / fit tolerances (round-trip the stored values).
@@ -4618,12 +4694,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
 
         // Knots
-        for knot in &spline.knots {
+        for knot in knots {
             self.writer.write_double(40, *knot)?;
         }
 
         // Control points (with optional weights for rational splines)
-        for (i, point) in spline.control_points.iter().enumerate() {
+        for (i, point) in control_points.iter().enumerate() {
             self.writer.write_point3d(10, *point)?;
             if spline.flags.rational {
                 let w = spline.weights.get(i).copied().unwrap_or(1.0);
@@ -6065,7 +6141,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::XRecord(xrecord) => self.write_xrecord(xrecord, document)?,
                 ObjectType::Group(group) => self.write_group(group)?,
                 ObjectType::MLineStyle(mlinestyle) => self.write_mlinestyle(mlinestyle)?,
-                ObjectType::ImageDefinition(imagedef) => self.write_image_definition(imagedef)?,
+                ObjectType::ImageDefinition(imagedef) => {
+                    self.write_image_definition(imagedef, document)?
+                }
                 ObjectType::UnderlayDefinition(def) => self.write_underlay_definition(def)?,
                 ObjectType::PlotSettings(plotsettings) => self.write_plot_settings(plotsettings)?,
                 ObjectType::MultiLeaderStyle(style) => self.write_multileader_style(style)?,
@@ -6080,7 +6158,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 ObjectType::ImageDefinitionReactor(obj) => self.write_imagedef_reactor(obj)?,
                 ObjectType::GeoData(obj) => self.write_geodata(obj)?,
                 ObjectType::SpatialFilter(obj) => self.write_spatial_filter(obj, document)?,
-                ObjectType::RasterVariables(obj) => self.write_raster_variables(obj)?,
+                ObjectType::RasterVariables(obj) => self.write_raster_variables(obj, document)?,
                 ObjectType::BookColor(obj) => self.write_bookcolor(obj)?,
                 ObjectType::PlaceHolder(obj) => {
                     self.write_stub_handle_only("ACDBPLACEHOLDER", obj.handle, obj.owner)?
@@ -7909,9 +7987,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         Ok(())
     }
 
-    fn write_image_definition(&mut self, imagedef: &ImageDefinition) -> Result<()> {
+    fn write_image_definition(
+        &mut self,
+        imagedef: &ImageDefinition,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "IMAGEDEF")?;
         self.writer.write_handle(5, imagedef.handle)?;
+        self.write_reactor_group(document.image_definition_reactors(imagedef))?;
         self.writer.write_handle(330, imagedef.owner)?;
         self.writer.write_subclass("AcDbRasterImageDef")?;
 
@@ -9326,9 +9409,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     }
 
     /// Write a RASTERVARIABLES object
-    fn write_raster_variables(&mut self, obj: &RasterVariables) -> Result<()> {
+    fn write_raster_variables(
+        &mut self,
+        obj: &RasterVariables,
+        document: &CadDocument,
+    ) -> Result<()> {
         self.writer.write_string(0, "RASTERVARIABLES")?;
         self.writer.write_handle(5, obj.handle)?;
+        self.write_reactor_group(document.raster_variables_reactors(obj))?;
         self.writer.write_handle(330, obj.owner)?;
         self.writer.write_subclass("AcDbRasterVariables")?;
         self.writer.write_i32(90, obj.class_version)?;
@@ -9336,6 +9424,25 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(71, obj.image_quality)?;
         self.writer.write_i16(72, obj.units)?;
         Ok(())
+    }
+
+    /// An object's `{ACAD_REACTORS` group: the reactors that are written.
+    fn write_reactor_group(&mut self, reactors: Vec<Handle>) -> Result<()> {
+        let reactors: Vec<Handle> = reactors
+            .into_iter()
+            .filter(|handle| {
+                !handle.is_null()
+                    && (self.valid_handles.is_empty() || self.valid_handles.contains(handle))
+            })
+            .collect();
+        if reactors.is_empty() {
+            return Ok(());
+        }
+        self.writer.write_string(102, "{ACAD_REACTORS")?;
+        for reactor in reactors {
+            self.writer.write_handle(330, reactor)?;
+        }
+        self.writer.write_string(102, "}")
     }
 
     /// Write a DBCOLOR object
