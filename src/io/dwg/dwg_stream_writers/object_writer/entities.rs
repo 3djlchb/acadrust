@@ -3776,7 +3776,22 @@ impl<'a> DwgObjectWriter<'a> {
         }
         self.writer.write_bit(cell.style.is_some());
         if let Some(style) = &cell.style {
-            let flags = style.override_flags;
+            let mut flags = style.override_flags;
+            for (weight_bit, border) in [
+                (0x400, &style.top_border),
+                (0x800, &style.right_border),
+                (0x1000, &style.bottom_border),
+                (0x2000, &style.left_border),
+            ] {
+                // DXF/API's older combined mask denotes both properties.
+                // Give visibility its own presence bit in the native stream.
+                if border.override_flags.is_empty()
+                    && flags & weight_bit != 0
+                    && i32::from(cell.virtual_edge) & (weight_bit >> 10) == 0
+                {
+                    flags |= weight_bit << 4;
+                }
+            }
             self.writer.write_bit_long(flags);
             self.writer.write_byte(cell.virtual_edge as u8);
             if flags & 0x01 != 0 {
@@ -3800,17 +3815,22 @@ impl<'a> DwgObjectWriter<'a> {
             if flags & 0x20 != 0 {
                 self.writer.write_bit_double(style.text_height);
             }
-            for (color_bit, lw_bit, border) in [
-                (0x40, 0x400, &style.top_border),
-                (0x80, 0x800, &style.right_border),
-                (0x100, 0x1000, &style.bottom_border),
-                (0x200, 0x2000, &style.left_border),
+            for (color_bit, lw_bit, visibility_bit, edge_bit, border) in [
+                (0x40, 0x400, 0x4000, 1, &style.top_border),
+                (0x80, 0x800, 0x8000, 2, &style.right_border),
+                (0x100, 0x1000, 0x10000, 4, &style.bottom_border),
+                (0x200, 0x2000, 0x20000, 8, &style.left_border),
             ] {
+                if cell.virtual_edge & edge_bit != 0 {
+                    continue;
+                }
                 if flags & color_bit != 0 {
                     self.writer.write_cm_color(&border.color);
                 }
                 if flags & lw_bit != 0 {
                     self.writer.write_bit_short(border.line_weight.as_i16());
+                }
+                if flags & visibility_bit != 0 {
                     self.writer.write_bit_short((!border.invisible) as i16);
                 }
             }

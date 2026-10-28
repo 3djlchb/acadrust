@@ -3883,9 +3883,9 @@ fn read_table_cell_data(
         _ => {}
     }
 
-    // Per-cell style override block (each conditional gated on the override
-    // flags; the grid line-weight bit gates both the weight and the visibility
-    // read, mirroring the source exactly to stay byte-aligned).
+    // Each legacy border property has its own presence bit. Visibility is
+    // independent of line weight; consuming it with the weight shifts the
+    // following cell value and every subsequent cell in a native R2007 table.
     if reader.read_bit() {
         let flags = reader.read_bit_long();
         let mut style = CellStyle::new();
@@ -3914,20 +3914,55 @@ fn read_table_cell_data(
             style.text_height = reader.read_bit_double();
         }
         // Per edge: colour, line weight, visibility.
-        for (color_bit, lw_bit, border) in [
-            (0x40, 0x400, &mut style.top_border),
-            (0x80, 0x800, &mut style.right_border),
-            (0x100, 0x1000, &mut style.bottom_border),
-            (0x200, 0x2000, &mut style.left_border),
+        for (color_bit, lw_bit, visibility_bit, edge, border) in [
+            (
+                0x40,
+                0x400,
+                0x4000,
+                CellEdgeFlags::TOP,
+                &mut style.top_border,
+            ),
+            (
+                0x80,
+                0x800,
+                0x8000,
+                CellEdgeFlags::RIGHT,
+                &mut style.right_border,
+            ),
+            (
+                0x100,
+                0x1000,
+                0x10000,
+                CellEdgeFlags::BOTTOM,
+                &mut style.bottom_border,
+            ),
+            (
+                0x200,
+                0x2000,
+                0x20000,
+                CellEdgeFlags::LEFT,
+                &mut style.left_border,
+            ),
         ] {
+            // Shared virtual edges take their properties from the real edge
+            // in a neighboring cell and carry no border payload here.
+            if cell.virtual_edge as u32 & edge.bits() != 0 {
+                continue;
+            }
             if flags & color_bit != 0 {
                 border.color = reader.read_cm_color();
+                border.override_flags |= BorderPropertyFlags::COLOR;
             }
             if flags & lw_bit != 0 {
                 border.line_weight = crate::types::LineWeight::from_value(reader.read_bit_short());
+                border.override_flags |= BorderPropertyFlags::LINE_WEIGHT;
             }
-            if flags & lw_bit != 0 {
+            if flags & visibility_bit != 0 {
                 border.invisible = reader.read_bit_short() == 0;
+                border.override_flags |= BorderPropertyFlags::INVISIBILITY;
+            }
+            if !border.override_flags.is_empty() {
+                style.applied_border_edges |= edge;
             }
         }
         cell.style = Some(style);
@@ -6244,6 +6279,153 @@ mod tests {
                 assert_eq!(r.read_handle(), 0xbeef);
             }
         }
+    }
+
+    #[test]
+    fn legacy_table_border_properties_have_independent_presence_bits() {
+        use crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer;
+        // Encode the documented flat-cell stream independently of ObjectWriter.
+        for edge in 0..4 {
+            for properties in 1..8 {
+                let color = properties & 1 != 0;
+                let weight = properties & 2 != 0;
+                let visibility = properties & 4 != 0;
+                let flags = (if color { 0x40 << edge } else { 0 })
+                    | (if weight { 0x400 << edge } else { 0 })
+                    | (if visibility { 0x4000 << edge } else { 0 });
+                let mut r = make_reader(DwgVersion::AC21, DxfVersion::AC1021, |w| {
+                    w.save_position_for_size();
+                    w.write_bit_short(1); // text cell
+                    w.write_byte(0);
+                    w.write_bit(false);
+                    w.write_bit(false);
+                    w.write_bit_long(1);
+                    w.write_bit_long(1);
+                    w.write_bit_double(0.0);
+                    w.write_handle(HardPointer, 0);
+                    w.write_bit(true);
+                    w.write_bit_long(flags);
+                    w.write_byte(0);
+                    if color {
+                        w.write_cm_color(&Color::from_index(1));
+                    }
+                    if weight {
+                        w.write_bit_short(50);
+                    }
+                    if visibility {
+                        w.write_bit_short(0);
+                    }
+                    w.write_bit_long(0); // cell flag, followed by AcDbCellValue
+                    w.write_bit_long(1); // empty value, no body
+                    w.write_bit_long(0); // raw value type
+                    w.write_bit_long(12); // unit type suppresses formatted value
+                    w.write_variable_text("format sentinel");
+                    w.write_bit_long(0x123456);
+                    w.write_handle(HardPointer, 0xbeef);
+                });
+                let size = r.read_raw_long();
+                r.setup_text_and_handle(size);
+                let cell = read_table_cell_data(&mut r, DwgVersion::AC21, DxfVersion::AC1021);
+                let style = cell.style.as_ref().unwrap();
+                let border = [
+                    &style.top_border,
+                    &style.right_border,
+                    &style.bottom_border,
+                    &style.left_border,
+                ][edge];
+                assert_eq!(
+                    border.override_flags.contains(BorderPropertyFlags::COLOR),
+                    color
+                );
+                assert_eq!(
+                    border
+                        .override_flags
+                        .contains(BorderPropertyFlags::LINE_WEIGHT),
+                    weight
+                );
+                assert_eq!(
+                    border
+                        .override_flags
+                        .contains(BorderPropertyFlags::INVISIBILITY),
+                    visibility
+                );
+                assert_eq!(border.invisible, visibility);
+                if color {
+                    assert_eq!(border.color, Color::from_index(1));
+                }
+                if weight {
+                    assert_eq!(border.line_weight.as_i16(), 50);
+                }
+                assert_eq!(
+                    cell.contents.last().unwrap().value.format,
+                    "format sentinel"
+                );
+                assert_eq!(r.read_bit_long(), 0x123456);
+                assert_eq!(r.read_handle(), 0xbeef);
+                r.check_error().unwrap();
+                let modern = cell.binary_layout();
+                let converted = modern.style.as_ref().unwrap();
+                let converted_border = [
+                    &converted.top_border,
+                    &converted.right_border,
+                    &converted.bottom_border,
+                    &converted.left_border,
+                ][edge];
+                assert_eq!(converted_border.override_flags, border.override_flags);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_table_virtual_edges_omit_border_payload() {
+        use crate::io::dwg::dwg_reference_type::DwgReferenceType::HardPointer;
+        let mut r = make_reader(DwgVersion::AC21, DxfVersion::AC1021, |w| {
+            w.save_position_for_size();
+            w.write_bit_short(1);
+            w.write_byte(15);
+            w.write_bit(false);
+            w.write_bit(false);
+            w.write_bit_long(1);
+            w.write_bit_long(1);
+            w.write_bit_double(0.0);
+            w.write_handle(HardPointer, 0);
+            w.write_bit(true);
+            w.write_bit_long(0x3ffc0); // all border property bits
+            w.write_byte(9); // top and left are virtual, so omit their payloads
+            for color in [1, 3] {
+                // only right and bottom carry data
+                w.write_cm_color(&Color::from_index(color));
+                w.write_bit_short(50);
+                w.write_bit_short(0);
+            }
+            w.write_bit_long(0);
+            w.write_bit_long(1);
+            w.write_bit_long(0);
+            w.write_bit_long(12);
+            w.write_variable_text("virtual edges sentinel");
+            w.write_bit_long(0x123456);
+        });
+        let size = r.read_raw_long();
+        r.setup_text_and_handle(size);
+        let cell = read_table_cell_data(&mut r, DwgVersion::AC21, DxfVersion::AC1021);
+        let style = cell.style.as_ref().unwrap();
+        assert_eq!(
+            style.applied_border_edges,
+            CellEdgeFlags::RIGHT | CellEdgeFlags::BOTTOM
+        );
+        assert!(style.top_border.override_flags.is_empty());
+        assert!(style.left_border.override_flags.is_empty());
+        assert_eq!(style.right_border.color, Color::from_index(1));
+        assert_eq!(style.bottom_border.color, Color::from_index(3));
+        assert!(style.right_border.invisible);
+        assert!(style.bottom_border.invisible);
+        assert_eq!(r.read_bit_long(), 0x123456);
+        r.check_error().unwrap();
+        let modern = cell.binary_layout();
+        assert_eq!(
+            modern.style.as_ref().unwrap().applied_border_edges,
+            style.applied_border_edges
+        );
     }
 
     #[test]

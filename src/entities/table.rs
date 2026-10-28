@@ -1106,14 +1106,22 @@ impl TableCell {
                     ),
                     (0x200, 0x2000, CellEdgeFlags::LEFT, &mut style.left_border),
                 ] {
-                    if own.override_flags & color_bit != 0 {
-                        border.override_flags |= BorderPropertyFlags::COLOR;
+                    if cell.virtual_edge as u32 & edge.bits() != 0 {
+                        continue;
                     }
-                    if own.override_flags & weight_bit != 0 {
-                        border.override_flags |=
-                            BorderPropertyFlags::LINE_WEIGHT | BorderPropertyFlags::INVISIBILITY;
+                    // Native flat DWG records already identify each border
+                    // property separately. Older DXF/API styles have only the
+                    // combined legacy mask, so retain their previous projection.
+                    if border.override_flags.is_empty() {
+                        if own.override_flags & color_bit != 0 {
+                            border.override_flags |= BorderPropertyFlags::COLOR;
+                        }
+                        if own.override_flags & weight_bit != 0 {
+                            border.override_flags |=
+                                BorderPropertyFlags::LINE_WEIGHT | BorderPropertyFlags::INVISIBILITY;
+                        }
                     }
-                    if own.override_flags & (color_bit | weight_bit) != 0 {
+                    if !border.override_flags.is_empty() {
                         style.applied_border_edges |= edge;
                     }
                 }
