@@ -880,6 +880,15 @@ fn objects_in_handle_order(document: &CadDocument) -> Vec<(Handle, &crate::objec
 /// profile would drop while an entity or object still uses it leaves the
 /// record without a valid type code, so it is kept, after the profile.
 fn prepare_legacy_classes(document: &mut CadDocument) {
+    // A proxy's class_id is positional. Removing or renumbering source
+    // registrations would make its opaque data belong to a different class.
+    if document.objects.values().any(|object| {
+        matches!(
+            object, crate::objects::ObjectType::ProxyObject(proxy) if proxy.class_id >= 500
+        )
+    }) {
+        return;
+    }
     let entity_classes = document.entities().map(entity_class_name);
     let object_classes = objects_in_handle_order(document)
         .into_iter()

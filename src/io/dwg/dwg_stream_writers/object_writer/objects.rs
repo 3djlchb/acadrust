@@ -374,6 +374,9 @@ impl<'a> DwgObjectWriter<'a> {
         let preserved_record = match obj {
             ObjectType::DynamicBlock(value) => Some((value.handle, value.xdictionary_handle)),
             ObjectType::Associative(value) => Some((value.handle, value.xdictionary_handle)),
+            ObjectType::ProxyObject(value) if value.dxf_subclass == "MAPRESOURCEMANAGEROBJECT" => {
+                Some((value.handle, value.xdictionary_handle))
+            }
             _ => None,
         };
         if let Some((handle, source_dictionary)) = preserved_record {

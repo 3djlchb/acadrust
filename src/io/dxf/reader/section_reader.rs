@@ -3330,6 +3330,9 @@ impl<'a> SectionReader<'a> {
 
     /// Read the CLASSES section
     pub fn read_classes(&mut self, document: &mut CadDocument) -> Result<()> {
+        // Proxy group 91 addresses the source CLASSES section position, not
+        // the built-in defaults or a name-deduplicated collection.
+        document.classes.clear();
         // Read classes until ENDSEC
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDSEC" {
@@ -3373,7 +3376,11 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 if !class.dxf_name.is_empty() {
-                    document.classes.add_or_update(class);
+                    class.class_number =
+                        i16::try_from(500 + document.classes.len()).map_err(|_| {
+                            crate::DxfError::Parse("DXF class table exceeds its index range".into())
+                        })?;
+                    document.classes.push_preserving(class);
                 }
             }
         }

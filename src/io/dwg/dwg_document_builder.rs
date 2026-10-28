@@ -380,6 +380,8 @@ impl Pass2Output {
 }
 
 struct ClassNames {
+    maintenance_version: i32,
+    map_proxy_classes: HashSet<i16>,
     cpp: HashMap<i16, String>,
     dxf: HashMap<i16, String>,
 }
@@ -387,6 +389,18 @@ struct ClassNames {
 impl ClassNames {
     fn from_document(document: &CadDocument) -> Self {
         Self {
+            maintenance_version: i32::from(document.maintenance_version),
+            map_proxy_classes: document
+                .classes
+                .iter()
+                .filter(|class| {
+                    class.was_zombie
+                        && !class.is_an_entity
+                        && class.dxf_name == "MAPRESOURCEMANAGEROBJECT"
+                        && class.cpp_class_name == "AcMapResourceManager"
+                })
+                .map(|class| class.class_number)
+                .collect(),
             cpp: document
                 .classes
                 .iter()
@@ -2071,6 +2085,7 @@ impl DwgDocumentBuilder {
                     // object still equals its read-time snapshot, since the
                     // models do not cover every bit strict readers expect.
                     if capture_raw
+                        || class_names.map_proxy_classes.contains(&raw_type_code)
                         || class_names.dxf.get(&raw_type_code).is_some_and(|name| {
                             matches!(name.as_str(), "ACSH_EXTRUSION_CLASS" | "DIMASSOC")
                                 || crate::objects::is_associative_object_name(name)
@@ -7866,7 +7881,38 @@ impl DwgDocumentBuilder {
                         }
                         let type_name =
                             Self::unknown_object_type_name(class_names, raw_type_code);
-                        let object = if crate::classes::arch::is_architecture_name(&type_name) {
+                        let object = if class_names.map_proxy_classes.contains(&raw_type_code)
+                            && document.version >= crate::types::DxfVersion::AC1021
+                            && !is_context_data
+                        {
+                            // A zombie Map class is an opaque application object, not
+                            // an empty record. Native CAD exports its class-specific
+                            // streams as ACAD_PROXY_OBJECT. Keep the common header
+                            // separate, and retain the original record for untouched
+                            // same-version DWG saves.
+                            let (payload, text_payload, object_ids) =
+                                entities::read_proxy_payload(&mut reader, handle);
+                            let dwg_version = i32::from(
+                                crate::io::dwg::dwg_stream_writers::aux_header_writer::dwg_internal_version(document.version),
+                            );
+                            let maintenance_version = class_names.maintenance_version;
+                            crate::objects::ObjectType::ProxyObject(crate::objects::ProxyObject {
+                                handle: Handle::from(handle),
+                                owner: owner_handle,
+                                reactors: non_entity_data.reactors.iter().copied().map(Handle::from).collect(),
+                                xdictionary_handle: non_entity_data.xdictionary_handle.map(Handle::from),
+                                proxy_id: 499,
+                                class_id: i32::from(raw_type_code),
+                                dxf_subclass: type_name,
+                                version: (maintenance_version << 16) | dwg_version,
+                                dwg_version,
+                                maintenance_version,
+                                from_dxf: false,
+                                payload,
+                                text_payload,
+                                object_ids,
+                            })
+                        } else if crate::classes::arch::is_architecture_name(&type_name) {
                             let mut arch = crate::classes::arch::ArchObject::new(
                                 type_name,
                                 Handle::from(handle),
@@ -8059,6 +8105,27 @@ impl DwgDocumentBuilder {
 mod tests {
     use super::*;
     use crate::classes::DxfClass;
+
+    #[test]
+    #[ignore = "requires ARQ_NATIVE_TABLE_ROOT with the original ProgeCAD sources"]
+    fn native_map_proxy_keeps_untouched_dwg_record() {
+        let root = std::env::var("ARQ_NATIVE_TABLE_ROOT").unwrap();
+        let document = crate::DwgReader::from_file(format!("{root}/tables-native-ac1032.dwg"))
+            .unwrap()
+            .read()
+            .unwrap();
+        let handle = Handle::from(676u64);
+        let (source_type, source) = &document.raw_records[&handle.value()];
+        assert_eq!(*source_type, 514);
+        let bytes = crate::DwgWriter::write_to_vec(&document).unwrap();
+        let back = crate::DwgReader::from_stream(std::io::Cursor::new(bytes))
+            .read()
+            .unwrap();
+        let (written_type, written) = &back.raw_records[&handle.value()];
+        assert_eq!(written_type, source_type);
+        assert_eq!(written.data, source.data);
+        assert_eq!(written.handle_bits, source.handle_bits);
+    }
 
     #[test]
     fn unknown_object_type_name_uses_class_dxf_name() {
