@@ -4,6 +4,7 @@
 //! HEADER, CLASSES, TABLES, BLOCKS, ENTITIES, and OBJECTS.
 
 mod associative;
+mod table_format;
 #[cfg(test)]
 mod table_tests;
 
@@ -11435,6 +11436,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
     /// Write ACAD_TABLE entity
     fn write_acad_table(&mut self, table: &table::Table, owner: Handle) -> Result<()> {
+        let projected = table_format::with_legacy_format(table);
+        let table = projected.as_ref();
         self.writer.write_entity_type("ACAD_TABLE")?;
         self.write_common_entity_data(&table.common, owner)?;
         self.writer.write_subclass("AcDbBlockReference")?;

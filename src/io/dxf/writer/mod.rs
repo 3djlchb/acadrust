@@ -4,6 +4,7 @@ mod binary_writer;
 mod r12;
 mod section_writer;
 mod stream_writer;
+mod table_roundtrip;
 mod text_writer;
 
 pub use binary_writer::DxfBinaryWriter;
@@ -273,6 +274,7 @@ impl<'a> DxfWriter<'a> {
         // so entity layer/linetype lookups miss and reference a name the
         // written table no longer defines (issue #80).
         crate::io::dwg::dwg_writer::prepare_table_keys(&mut prepared);
+        table_roundtrip::prepare(&mut prepared, output_version);
         // Table entries added after the document was built or read
         // (`Layer::new` + `layers.add`, `AppId::new` + `app_ids.add`) still
         // carry NULL handles. Written as they are, each becomes a `5 / 0`
