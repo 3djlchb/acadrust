@@ -41,6 +41,7 @@ fn legacy_cell_background_fill_survives_modern_dwg_conversion() {
     for version in [DxfVersion::AC1024, DxfVersion::AC1027, DxfVersion::AC1032] {
         for enabled in [false, true] {
             let mut style = CellStyle::new();
+            style.legacy_override_bits = true;
             style.override_flags = 0x02 | 0x04;
             style.background_color = Color::from_index(1);
             style.fill_enabled = enabled;
@@ -72,7 +73,10 @@ fn legacy_cell_background_fill_survives_modern_dwg_conversion() {
 fn legacy_cell_borders_survive_modern_dwg_conversion() {
     for version in [DxfVersion::AC1024, DxfVersion::AC1027, DxfVersion::AC1032] {
         let mut style = CellStyle::new();
-        style.override_flags = 0x40 | 0x800 | 0x100 | 0x1000;
+        // Explicit legacy properties: right/bottom visibility is independent
+        // of lineweight, just as it is in native flat table records.
+        style.legacy_override_bits = true;
+        style.override_flags = 0x40 | 0x800 | 0x8000 | 0x100 | 0x1000 | 0x10000;
         style.top_border.color = Color::from_index(3);
         style.right_border.line_weight = LineWeight::from_value(25);
         style.right_border.invisible = true;
@@ -139,7 +143,7 @@ fn legacy_invisible_cell_borders_survive_modern_dwg_conversion() {
         table.set_cell_text(0, 0, "hidden border");
         let mut style = CellStyle::new();
         style.legacy_override_bits = true;
-        style.override_flags = 0x800;
+        style.override_flags = 0x800 | 0x8000;
         style.right_border.line_weight = LineWeight::from_value(25);
         style.right_border.invisible = true;
         table.rows[0].cells[0].style = Some(style);

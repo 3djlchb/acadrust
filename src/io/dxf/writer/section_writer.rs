@@ -5,6 +5,7 @@
 
 mod associative;
 mod table_format;
+mod table_cells;
 #[cfg(test)]
 mod table_tests;
 
@@ -27,6 +28,10 @@ use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 
 use super::stream_writer::{DxfStreamWriter, DxfStreamWriterExt};
 use std::collections::{HashMap, HashSet};
+
+pub(super) fn project_modern_table_cells(table: &mut table::Table) {
+    table_cells::project(table);
+}
 
 /// Sanitize a symbol table record name: strip control characters and
 /// characters forbidden by ACAD (`< > / \ " : ; ? * | , = \``).
@@ -11526,6 +11531,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         merged_range: Option<&table::CellRange>,
         merged: bool,
     ) -> Result<()> {
+        let projected = table_format::with_legacy_cell(cell);
+        let cell = projected.as_ref();
         // Cell type
         self.writer.write_i16(171, cell.cell_type as i16)?;
 
@@ -11549,7 +11556,14 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(175, merge_width as i16)?;
         self.writer.write_i16(176, merge_height as i16)?;
         if self.dxf_version >= DxfVersion::AC1021 {
-            self.writer.write_i32(91, cell.flag)?;
+            // Native readers require the legacy value-present bit even when the
+            // modern DWG cell has no legacy flag word of its own.
+            let has_value = cell
+                .contents
+                .first()
+                .is_some_and(|content| content.content_type == TableCellContentType::Value);
+            self.writer
+                .write_i32(91, cell.flag | if has_value { 0x40000 } else { 0 })?;
             self.writer.write_i32(92, cell.state.bits() as i32)?;
         } else {
             self.writer.write_i16(177, cell.flag as i16)?;
@@ -11593,14 +11607,6 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_handle(340, handle)?;
             }
 
-            if self.dxf_version >= DxfVersion::AC1021
-                && content.content_type == TableCellContentType::Value
-            {
-                self.writer.write_string(301, "CELL_VALUE")?;
-                self.write_field_cell_value_dxf(&content.value)?;
-                self.writer.write_string(304, "ACVALUE_END")?;
-            }
-
             if !content.attributes.is_empty() {
                 self.writer
                     .write_i16(179, content.attributes.len() as i16)?;
@@ -11632,18 +11638,58 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             if f & 0x20 != 0 {
                 self.writer.write_double(140, style.text_height)?;
             }
-            for (color_bit, lw_bit, (color_code, weight_code, visibility_code), border) in [
-                (0x40, 0x400, (69, 279, 289), &style.top_border),
-                (0x80, 0x800, (65, 275, 285), &style.right_border),
-                (0x100, 0x1000, (66, 276, 286), &style.bottom_border),
-                (0x200, 0x2000, (68, 278, 288), &style.left_border),
+            for (
+                color_bit,
+                lw_bit,
+                visibility_bit,
+                edge,
+                (color_code, weight_code, visibility_code),
+                border,
+            ) in [
+                (
+                    0x40,
+                    0x400,
+                    0x4000,
+                    table::CellEdgeFlags::TOP,
+                    (69, 279, 289),
+                    &style.top_border,
+                ),
+                (
+                    0x80,
+                    0x800,
+                    0x8000,
+                    table::CellEdgeFlags::RIGHT,
+                    (65, 275, 285),
+                    &style.right_border,
+                ),
+                (
+                    0x100,
+                    0x1000,
+                    0x10000,
+                    table::CellEdgeFlags::BOTTOM,
+                    (66, 276, 286),
+                    &style.bottom_border,
+                ),
+                (
+                    0x200,
+                    0x2000,
+                    0x20000,
+                    table::CellEdgeFlags::LEFT,
+                    (68, 278, 288),
+                    &style.left_border,
+                ),
             ] {
+                if cell.virtual_edge as u32 & edge.bits() != 0 {
+                    continue;
+                }
                 if f & color_bit != 0 {
                     self.writer.write_color(color_code, border.color)?;
                 }
                 if f & lw_bit != 0 {
                     self.writer
                         .write_i16(weight_code, border.line_weight.value())?;
+                }
+                if f & visibility_bit != 0 {
                     self.writer.write_bool(visibility_code, !border.invisible)?;
                 }
             }
@@ -11670,6 +11716,19 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
         }
 
+        // The native legacy projection puts per-cell overrides before the
+        // R2007+ value block. Readers may ignore trailing overrides otherwise.
+        if self.dxf_version >= DxfVersion::AC1021 {
+            if let Some(content) = cell
+                .contents
+                .first()
+                .filter(|content| content.content_type == TableCellContentType::Value)
+            {
+                self.writer.write_string(301, "CELL_VALUE")?;
+                self.write_field_cell_value_dxf(&content.value)?;
+                self.writer.write_string(304, "ACVALUE_END")?;
+            }
+        }
         Ok(())
     }
 

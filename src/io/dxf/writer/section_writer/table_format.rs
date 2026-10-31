@@ -95,3 +95,58 @@ pub(super) fn with_legacy_format(table: &Table) -> Cow<'_, Table> {
     result.legacy_style_override = Some(legacy);
     Cow::Owned(result)
 }
+
+/// Modern cell flags and legacy ACAD_TABLE flags use different bit assignments.
+/// Only project asserted, representable properties; the companion retains the rest.
+pub(super) fn with_legacy_cell(
+    cell: &crate::entities::table::TableCell,
+) -> Cow<'_, crate::entities::table::TableCell> {
+    use crate::entities::table::{BorderPropertyFlags as B, CellEdgeFlags as E};
+    let Some(source) = cell
+        .style
+        .as_ref()
+        .filter(|style| !style.legacy_override_bits)
+    else {
+        return Cow::Borrowed(cell);
+    };
+    let mut style = source.clone();
+    let mut flags = 0;
+    for (property, bit) in [
+        (P::ALIGNMENT, 0x01),
+        (P::BACKGROUND_COLOR, 0x06),
+        (P::CONTENT_COLOR, 0x08),
+        (P::TEXT_HEIGHT, 0x20),
+    ] {
+        if source.sets(property) {
+            flags |= bit;
+        }
+    }
+    if source.sets(P::TEXT_STYLE) && !source.text_style_name.is_empty() {
+        flags |= 0x10;
+    }
+    for (edge, color, weight, visibility, border) in [
+        (E::TOP, 0x40, 0x400, 0x4000, &source.top_border),
+        (E::RIGHT, 0x80, 0x800, 0x8000, &source.right_border),
+        (E::BOTTOM, 0x100, 0x1000, 0x10000, &source.bottom_border),
+        (E::LEFT, 0x200, 0x2000, 0x20000, &source.left_border),
+    ] {
+        if !source.applied_border_edges.contains(edge) {
+            continue;
+        }
+        if border.override_flags.contains(B::COLOR) {
+            flags |= color;
+        }
+        if border.override_flags.contains(B::LINE_WEIGHT) {
+            flags |= weight;
+        }
+        if border.override_flags.contains(B::INVISIBILITY) {
+            flags |= visibility;
+        }
+    }
+    style.override_flags = flags;
+    style.legacy_override_bits = true;
+    let mut result = cell.clone();
+    result.flag = (result.flag & !0x3ffff) | flags;
+    result.style = (flags != 0).then_some(style);
+    Cow::Owned(result)
+}

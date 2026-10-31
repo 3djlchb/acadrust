@@ -36,6 +36,7 @@ pub(super) fn prepare(document: &mut Cow<'_, CadDocument>, version: DxfVersion) 
     }
     let doc = document.to_mut();
     for mut content in tables {
+        let table_handle = content.common.handle;
         let dictionary = doc.ensure_extension_dictionary(content.common.handle);
         let record_handle = doc.allocate_handle();
         let content_handle = doc.allocate_handle();
@@ -64,6 +65,9 @@ pub(super) fn prepare(document: &mut Cow<'_, CadDocument>, version: DxfVersion) 
             .insert(record_handle, ObjectType::XRecord(record));
         if let Some(ObjectType::Dictionary(value)) = doc.objects.get_mut(&dictionary) {
             value.add_entry("ACAD_XREC_ROUNDTRIP", record_handle);
+        }
+        if let Some(EntityType::Table(table)) = doc.get_entity_mut(table_handle) {
+            super::section_writer::project_modern_table_cells(table);
         }
     }
 }

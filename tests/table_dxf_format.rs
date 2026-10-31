@@ -50,6 +50,18 @@ fn roundtrip(doc: &CadDocument) -> CadDocument {
         .unwrap()
 }
 
+// Without a modern companion, older targets still require the global legacy fields.
+fn legacy_roundtrip(doc: &CadDocument) -> CadDocument {
+    let bytes = DxfWriter::new(doc)
+        .with_version(DxfVersion::AC1021)
+        .write_to_vec()
+        .unwrap();
+    DxfReader::from_reader(Cursor::new(bytes))
+        .unwrap()
+        .read()
+        .unwrap()
+}
+
 fn formatting(doc: &CadDocument) -> &LegacyTableStyleOverride {
     let EntityType::Table(table) = doc
         .entities()
@@ -72,7 +84,7 @@ fn modern_base_margins_are_projected_into_dxf_without_mutating_source() {
         .find(|e| matches!(e, EntityType::Table(_)))
         .unwrap()
         .clone();
-    let back = roundtrip(&doc);
+    let back = legacy_roundtrip(&doc);
     let style = formatting(&back);
     assert_eq!(style.horizontal_cell_margin, Some(4.5));
     assert_eq!(style.vertical_cell_margin, Some(3.0));
@@ -86,7 +98,7 @@ fn modern_base_margins_are_projected_into_dxf_without_mutating_source() {
 
 #[test]
 fn modern_row_type_text_heights_are_projected_in_data_title_header_order() {
-    let back = roundtrip(&source());
+    let back = legacy_roundtrip(&source());
     let style = formatting(&back);
     assert_eq!(style.flags & 0x700000, 0x700000);
     assert_eq!(style.row_heights, [2.5, 6.0, 4.0]);
@@ -120,10 +132,43 @@ fn native_dwg_exports_instance_margins_and_row_heights() {
             480 => (2.0, 2.0, 4.0),
             _ => (1.5, 1.5, 2.5),
         };
-        let style = t.legacy_style_override.as_ref().unwrap();
-        assert_eq!(style.horizontal_cell_margin, Some(h));
-        assert_eq!(style.vertical_cell_margin, Some(v));
-        assert_eq!(style.row_heights, [text, text, text]);
+        assert!(t
+            .legacy_style_override
+            .as_ref()
+            .is_none_or(|s| s.flags & 0x700018 == 0));
+        for row in &t.rows {
+            for cell in &row.cells {
+                assert_eq!(cell.style.as_ref().unwrap().text_height, text);
+            }
+        }
+        let dictionary = back.extension_dictionary_handle(t.common.handle).unwrap();
+        let acadrust::objects::ObjectType::Dictionary(dictionary) =
+            back.objects.get(&dictionary).unwrap()
+        else {
+            panic!()
+        };
+        let acadrust::objects::ObjectType::XRecord(record) = back
+            .objects
+            .get(&dictionary.get("ACAD_XREC_ROUNDTRIP").unwrap())
+            .unwrap()
+        else {
+            panic!()
+        };
+        let handle = record
+            .entries
+            .iter()
+            .find(|e| e.code == 360)
+            .unwrap()
+            .value
+            .as_handle()
+            .unwrap();
+        let acadrust::objects::ObjectType::TableContent(content) =
+            back.objects.get(&handle).unwrap()
+        else {
+            panic!()
+        };
+        let base = content.base_style.as_ref().unwrap();
+        assert_eq!((base.margin_left, base.margin_top), (h, v));
     }
     assert_eq!(checked, 4);
 }
@@ -147,7 +192,7 @@ fn modern_asserted_format_wins_stale_legacy_projection() {
         row_heights: vec![0.18; 3],
         ..Default::default()
     });
-    let back = roundtrip(&doc);
+    let back = legacy_roundtrip(&doc);
     let s = formatting(&back);
     assert_eq!(s.horizontal_cell_margin, Some(4.5));
     assert_eq!(s.vertical_cell_margin, Some(3.0));
@@ -168,7 +213,7 @@ fn unequal_margins_and_distinct_data_row_heights_are_not_flattened() {
     };
     t.base_style.as_mut().unwrap().margin_right = 7.0;
     t.rows[3].style.as_mut().unwrap().text_height = 3.5;
-    let back = roundtrip(&doc);
+    let back = legacy_roundtrip(&doc);
     let s = formatting(&back);
     assert_eq!(s.horizontal_cell_margin, None);
     assert_eq!(s.vertical_cell_margin, Some(3.0));
@@ -242,7 +287,7 @@ fn absent_title_uses_header_then_data_when_style_ids_are_unspecified() {
         title_suppressed: Some(true),
         ..Default::default()
     });
-    let back = roundtrip(&doc);
+    let back = legacy_roundtrip(&doc);
     let style = formatting(&back);
     assert_eq!(style.flags & 0x700000, 0x500000);
     assert_eq!(style.row_heights, [2.5, 4.0]);
@@ -325,7 +370,28 @@ fn ascii_and_binary_dxf_preserve_the_same_complete_instance_format() {
                 .unwrap();
             assert_eq!(content.base_style.as_ref().unwrap().margin_left, 4.5);
             assert_eq!(content.rows[0].style.as_ref().unwrap().text_height, 6.0);
-            assert_eq!(formatting(&back).row_heights, [2.5, 6.0, 4.0]);
+            let table = back
+                .entities()
+                .find_map(|e| {
+                    if let EntityType::Table(t) = e {
+                        Some(t)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(
+                table
+                    .rows
+                    .iter()
+                    .map(|r| r.cells[0].style.as_ref().unwrap().text_height)
+                    .collect::<Vec<_>>(),
+                [6.0, 4.0, 2.5, 2.5, 2.5]
+            );
+            assert!(table
+                .legacy_style_override
+                .as_ref()
+                .is_none_or(|s| s.flags & 0x700018 == 0));
         }
     }
 }
