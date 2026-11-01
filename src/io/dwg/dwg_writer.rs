@@ -1019,6 +1019,12 @@ fn prepare_legacy_document(document: &mut CadDocument) {
     use crate::objects::ObjectType;
     let keep_mleader_style = document.version >= DxfVersion::AC1018
         && document.classes.get_by_name("MLEADERSTYLE").is_some();
+    // A class-bearing R2000 source can already own a TABLESTYLE and its
+    // round-trip companions. Rewriting that same format is not a downgrade:
+    // removing the style leaves the retained companion graph dangling.
+    let keep_table_style = document.version == DxfVersion::AC1015
+        && document.dwg_source_version == Some(document.version)
+        && document.classes.get_by_name("TABLESTYLE").is_some();
     let root_handle = document.header.named_objects_dict_handle;
     let mut obsolete = Vec::new();
     if let Some(ObjectType::Dictionary(root)) = document.objects.get_mut(&root_handle) {
@@ -1026,7 +1032,9 @@ fn prepare_legacy_document(document: &mut CadDocument) {
             let remove = (name == "ACAD_MLEADERSTYLE"
                 && document.version < DxfVersion::AC1021
                 && !keep_mleader_style)
-                || (name == "ACAD_TABLESTYLE" && document.version < DxfVersion::AC1018);
+                || (name == "ACAD_TABLESTYLE"
+                    && document.version < DxfVersion::AC1018
+                    && !keep_table_style);
             if remove {
                 obsolete.push(*handle);
             }
