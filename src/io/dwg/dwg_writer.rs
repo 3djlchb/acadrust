@@ -1014,10 +1014,13 @@ fn prepare_legacy_document(document: &mut CadDocument) {
 
     // TABLESTYLE is an R2004 object. MLEADERSTYLE is an R2007 object.
     // R2004 saves keep ACAD_MLEADERSTYLE when that class is already declared,
-    // in the pre-R2010 record layout. Older saves drop the dictionary and the
-    // style object it holds.
+    // in the pre-R2010 record layout. R14/R2000 can already contain that
+    // class too: preserve it when rewriting its own source version. New
+    // legacy documents and genuine downgrades keep the removal policy.
     use crate::objects::ObjectType;
-    let keep_mleader_style = document.version >= DxfVersion::AC1018
+    let same_legacy_source = matches!(document.version, DxfVersion::AC1014 | DxfVersion::AC1015)
+        && document.dwg_source_version == Some(document.version);
+    let keep_mleader_style = (document.version >= DxfVersion::AC1018 || same_legacy_source)
         && document.classes.get_by_name("MLEADERSTYLE").is_some();
     // A class-bearing R2000 source can already own a TABLESTYLE and its
     // round-trip companions. Rewriting that same format is not a downgrade:

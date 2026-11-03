@@ -77,6 +77,14 @@ fn same_version_r2000_retains_styles_without_changing_the_source() {
         panic!()
     };
     d.add_entry("Distinct", extra);
+    // Names are dictionary keys; vertical attachment is absent before R2010.
+    // Model an existing legacy record, not unrepresentable modern defaults.
+    for object in doc.objects.values_mut() {
+        if let ObjectType::MultiLeaderStyle(style) = object {
+            style.name.clear();
+            style.text_bottom_attachment = acadrust::objects::TextAttachmentType::TopOfTopLine;
+        }
+    }
     let original = doc.objects.clone();
     let back = rewrite(&doc);
     assert_eq!(doc.objects, original);
@@ -102,6 +110,17 @@ fn native(relative: &str) {
         .unwrap();
     assert_eq!(source.dwg_source_version, Some(source.version));
     assert_styles(&source, &rewrite(&source));
+    let mut edited = source.clone();
+    for object in edited.objects.values_mut() {
+        if let ObjectType::MultiLeaderStyle(style) = object {
+            style.text_height += 1.125;
+            style.arrowhead_size += 0.75;
+            style.property_changed = true;
+        }
+    }
+    let before = edited.objects.clone();
+    assert_styles(&edited, &rewrite(&edited));
+    assert_eq!(edited.objects, before);
 }
 #[test]
 #[ignore = "requires ARQ_MLEADER_CORPUS"]
@@ -112,4 +131,17 @@ fn native_r2000_constraints_style_identity_and_properties() {
 #[ignore = "requires ARQ_MLEADER_CORPUS; R14 evaluated separately"]
 fn native_r14_constraints_style_identity_and_properties() {
     native("r14/Constraints.dwg");
+}
+
+#[test]
+fn new_legacy_documents_do_not_gain_the_same_source_exception() {
+    for version in [DxfVersion::AC1014, DxfVersion::AC1015] {
+        let source = CadDocument::with_version(version);
+        assert_eq!(source.dwg_source_version, None);
+        let back = rewrite(&source);
+        assert!(!back
+            .objects
+            .values()
+            .any(|o| matches!(o, ObjectType::MultiLeaderStyle(_))));
+    }
 }
