@@ -140,7 +140,23 @@ fn native_roundtrip(name: &str, handle: u64, owner: u64) {
             .unwrap();
         assert_eq!(table(&copy), (object, expected));
         for row in &expected.columns[3].rows {
-            assert_eq!(copy.objects.get(&row.handle), doc.objects.get(&row.handle));
+            let (Some(ObjectType::XRecord(back)), Some(ObjectType::XRecord(source))) =
+                (copy.objects.get(&row.handle), doc.objects.get(&row.handle))
+            else {
+                panic!("each of the 180 owned cell records must survive");
+            };
+            // DXF has no DWG transport cache. Compare every modeled field,
+            // including reference semantics and completeness, rather than
+            // requiring obsolete source-encoding bytes in a new format.
+            assert_eq!(back.handle, source.handle);
+            assert_eq!(back.owner, source.owner);
+            assert_eq!(back.reactors, source.reactors);
+            assert_eq!(back.xdictionary_handle, source.xdictionary_handle);
+            assert_eq!(back.name, source.name);
+            assert_eq!(back.cloning_flags, source.cloning_flags);
+            assert_eq!(back.entries, source.entries);
+            assert_eq!(back.object_references, source.object_references);
+            assert_eq!(back.entries_complete, source.entries_complete);
         }
     }
 }

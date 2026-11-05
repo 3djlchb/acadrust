@@ -1069,7 +1069,7 @@ pub struct SunStudy {
 
 /// Native AcDbDataCell types used by DATATABLE columns.
 ///
-/// Native codecs currently support Integer, Double, Text, Point, and ObjectId.
+/// Native codecs currently support Integer, Double, Text, Point, ObjectId, and HardOwnerId.
 /// Other types read from DWG are preserved as complete opaque records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
@@ -1119,7 +1119,12 @@ impl DataTableCellType {
     pub(crate) fn has_native_codec(self) -> bool {
         matches!(
             self,
-            Self::Integer | Self::Double | Self::Text | Self::Point | Self::ObjectId
+            Self::Integer
+                | Self::Double
+                | Self::Text
+                | Self::Point
+                | Self::ObjectId
+                | Self::HardOwnerId
         )
     }
 }

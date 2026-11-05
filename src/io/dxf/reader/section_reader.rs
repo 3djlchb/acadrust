@@ -6262,7 +6262,12 @@ impl<'a> SectionReader<'a> {
                 })
             }
             "DATATABLE" | "ACDBDATATABLE" => {
-                let section = "AcDbDataTable";
+                // ProgeCAD emits this uppercase subclass in native legacy DXF.
+                let section = if fields.has("ACDBDATATABLE", 90) {
+                    "ACDBDATATABLE"
+                } else {
+                    "AcDbDataTable"
+                };
                 let flags = fields.i16(section, 70);
                 let column_count = fields.i32(section, 90).max(0).min(100_000);
                 let row_count = fields.i32(section, 91);
@@ -6288,6 +6293,9 @@ impl<'a> SectionReader<'a> {
                             DataTableCellType::Point => value.point = fields.point3(section, 10),
                             DataTableCellType::ObjectId => {
                                 value.handle = fields.handle(section, 331)
+                            }
+                            DataTableCellType::HardOwnerId => {
+                                value.handle = fields.handle(section, 360)
                             }
                             _ => unreachable!("cell type checked above"),
                         }

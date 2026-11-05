@@ -7322,7 +7322,15 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             }
             Data::DataTable(value) => {
                 value.validate()?;
-                self.write_class_object_header(object, "AcDbDataTable")?;
+                // Native legacy DXF uses the uppercase subclass spelling.
+                // The modern spelling reopens as an empty table in ProgeCAD
+                // under R14/R2000 headers, despite passing internal read-back.
+                let subclass = if self.dxf_version < DxfVersion::AC1018 {
+                    "ACDBDATATABLE"
+                } else {
+                    "AcDbDataTable"
+                };
+                self.write_class_object_header(object, subclass)?;
                 self.writer.write_i16(70, value.flags)?;
                 self.writer.write_i32(90, value.columns.len() as i32)?;
                 self.writer.write_i32(91, value.row_count)?;
@@ -7343,6 +7351,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                             }
                             DataTableCellType::ObjectId => {
                                 self.writer.write_handle(331, row.handle)?
+                            }
+                            DataTableCellType::HardOwnerId => {
+                                self.writer.write_handle(360, row.handle)?
                             }
                             _ => unreachable!("DATATABLE validated above"),
                         }

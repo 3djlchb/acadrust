@@ -1559,7 +1559,9 @@ pub fn read_xrecord(reader: &mut DwgMergedReader) -> XRecordData {
     let cloning_flags = if reader.dxf_version() >= DxfVersion::AC1015 {
         reader.read_bit_short()
     } else {
-        0
+        // R14 omits this field. Native readers apply KeepExisting, so retain
+        // that implicit rule when the record is exported to a newer format.
+        1
     };
     let (mut entries, entries_complete) =
         decode_xrecord_entries(&raw_data, reader.dxf_version() >= DxfVersion::AC1021);
