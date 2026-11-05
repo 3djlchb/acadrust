@@ -6926,7 +6926,7 @@ impl<'a> SectionReader<'a> {
                             }
                         }
                         "XRECORD" => {
-                            if let Some(obj) = self.read_xrecord()? {
+                            if let Some(obj) = self.read_xrecord(document.version)? {
                                 document
                                     .objects
                                     .insert(obj.handle, ObjectType::XRecord(obj));
@@ -20908,12 +20908,16 @@ impl<'a> SectionReader<'a> {
     // ===== New Object Readers =====
 
     /// Read an XRECORD object
-    fn read_xrecord(&mut self) -> Result<Option<XRecord>> {
+    fn read_xrecord(&mut self, version: DxfVersion) -> Result<Option<XRecord>> {
         let mut xr = XRecord::new();
+        if version < DxfVersion::AC1015 {
+            xr.cloning_flags = DictionaryCloningFlags::KeepExisting;
+        }
         let mut group = String::new();
         let mut owner_seen = false;
-        // Only the first 280 is the cloning flag; later ones are record data.
-        let mut cloning_seen = false;
+        // R2000 introduced cloning metadata. In R14 every 280 is record data;
+        // in newer versions only the first one is the cloning flag.
+        let mut cloning_seen = version < DxfVersion::AC1015;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {

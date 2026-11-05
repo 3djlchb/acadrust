@@ -7833,8 +7833,12 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
         self.writer.write_handle(330, xrecord.owner)?;
         self.writer.write_subclass("AcDbXrecord")?;
-        self.writer
-            .write_byte(280, xrecord.cloning_flags.to_code() as u8)?;
+        // R14 has an implicit cloning rule. A leading 280 there is payload,
+        // and inserting the R2000 metadata corrupts legacy round-trip records.
+        if self.dxf_version >= DxfVersion::AC1015 {
+            self.writer
+                .write_byte(280, xrecord.cloning_flags.to_code() as u8)?;
+        }
 
         let advanced_material_entries = match document.objects.get(&xrecord.owner) {
             Some(ObjectType::Dictionary(dictionary))
