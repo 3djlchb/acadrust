@@ -115,6 +115,9 @@ impl DwgWriter {
                 crate::objects::store_table_style_roundtrip(&mut owned);
                 crate::objects::store_visual_style_roundtrip(&mut owned);
             }
+            if owned.version < DxfVersion::AC1024 {
+                prepare_mleaderstyle_version(&mut owned);
+            }
             &owned
         } else {
             document
@@ -976,6 +979,53 @@ fn add_missing_object_classes(document: &mut CadDocument) {
 ///
 /// R14 and older expect a VxTable record per viewport. Style dictionaries are
 /// removed before the version that introduced their objects.
+/// Before R2010 an MLEADERSTYLE does not hold its class version in its own
+/// data: AutoCAD writes it as EED of the `ACAD_MLEADERVER` application,
+/// `1070 2`, the version whose fields the object writer writes (text angle
+/// type, text always left). A reader without it takes version 1, and
+/// ProgeCAD refuses the drawing. Styles that already carry it, read or set,
+/// keep theirs.
+fn prepare_mleaderstyle_version(document: &mut CadDocument) {
+    use crate::objects::ObjectType;
+    use crate::tables::{AppId, TableEntry};
+    use crate::xdata::{ExtendedDataRecord, XDataValue};
+    const APP: &str = "ACAD_MLEADERVER";
+    let styles: Vec<Handle> = document
+        .objects
+        .iter()
+        .filter(|(_, object)| matches!(object, ObjectType::MultiLeaderStyle(_)))
+        .map(|(handle, _)| *handle)
+        .collect();
+    if styles.is_empty() {
+        return;
+    }
+    if document.app_ids.get(APP).is_none() {
+        let mut app = AppId::new(APP);
+        app.set_handle(document.allocate_handle());
+        let _ = document.app_ids.add(app);
+    }
+    let app_handle = document.app_ids.get(APP).map(|app| app.handle.value());
+    for handle in styles {
+        let set = document.object_xdata(handle).is_some_and(|xdata| {
+            xdata
+                .records()
+                .iter()
+                .any(|record| record.application_name.eq_ignore_ascii_case(APP))
+        });
+        let read = app_handle.is_some_and(|app| {
+            document
+                .eed_by_handle
+                .get(&handle)
+                .is_some_and(|raw| raw.iter().any(|(owner, _)| *owner == app))
+        });
+        if !set && !read {
+            let mut record = ExtendedDataRecord::new(APP);
+            record.add_value(XDataValue::Integer16(2));
+            document.set_object_xdata_record(handle, record);
+        }
+    }
+}
+
 fn prepare_legacy_document(document: &mut CadDocument) {
     if document.version <= DxfVersion::AC1014 {
         let missing: Vec<_> = document
