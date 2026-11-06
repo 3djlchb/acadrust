@@ -3580,6 +3580,39 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // A dimension style the drawing does not hold (the default "Standard"
+        // a drawing without one still gets) keeps the text style handle the
+        // defaults had in a new document; in this drawing that handle may name
+        // another record (a linetype in LibreDWG's example_2000.dwg). Resolve
+        // it by the text style name it keeps, else the drawing's current text
+        // style. The drawing's own styles keep what they were read with.
+        {
+            let text_style_by_name: HashMap<String, Handle> = document
+                .text_styles
+                .iter()
+                .map(|style| (style.name.to_ascii_uppercase(), style.handle))
+                .collect();
+            let is_text_style = |handle: Handle| {
+                text_style_by_name.values().any(|known| *known == handle)
+            };
+            let current = document.header.current_text_style_handle;
+            let fallback = is_text_style(current).then_some(current);
+            for style in document.dim_styles.iter_mut() {
+                if maps.dim_styles.contains_key(&style.handle.value())
+                    || is_text_style(style.dimtxsty_handle)
+                {
+                    continue;
+                }
+                if let Some(handle) = text_style_by_name
+                    .get(&style.dimtxsty.to_ascii_uppercase())
+                    .copied()
+                    .or(fallback)
+                {
+                    style.dimtxsty_handle = handle;
+                }
+            }
+        }
+
         document.header.current_layer_name = document
             .layers
             .iter()
