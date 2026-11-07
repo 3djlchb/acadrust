@@ -647,21 +647,20 @@ fn looks_like_negative_index(s: &str) -> bool {
 ///
 /// | Entity types                                       | Sentinel position |
 /// |----------------------------------------------------|-------------------|
-/// | body, subshell, wire, face, loop, coedge, edge,    | 0                 |
-/// | vertex,                                            |                   |
+/// | body, lump, shell, subshell, wire, face, loop,     | 0                 |
+/// | coedge, edge, vertex,                              |                   |
 /// | point, transform, *-surface, *-curve               |                   |
-/// | lump                                               | 1                 |
-/// | shell                                              | 2                 |
+///
+/// Lumps and shells too: their accessors read the v700 layout with the
+/// sentinel first (`$pattern $next ...`), so a v400 `$next` must land at 1.
 ///
 /// By inserting a synthetic `$-1` here the rest of the codebase can use
 /// a single set of token indices regardless of the source ACIS version.
 pub(crate) fn normalize_v400_tokens(entity_type: &str, tokens: &mut Vec<SatToken>) {
     let base = base_entity_type(entity_type);
     let position = match base {
-        "lump" => 1.min(tokens.len()),
-        "shell" => 2.min(tokens.len()),
-        "body" | "subshell" | "wire" | "face" | "loop" | "vertex" | "coedge" | "edge" | "point"
-        | "transform" | "surface" | "curve" | "pcurve" => 0,
+        "body" | "lump" | "shell" | "subshell" | "wire" | "face" | "loop" | "vertex" | "coedge"
+        | "edge" | "point" | "transform" | "surface" | "curve" | "pcurve" => 0,
         // Unknown entity types (attributes, etc.): leave unchanged.
         _ => return,
     };

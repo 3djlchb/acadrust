@@ -107,11 +107,13 @@ impl SatWriter {
         // records to v700 layout; the writer must strip it when producing
         // v400 output.
         let skip_index: Option<usize> = if version.major < 7 {
+            // The sentinel is token 0 of every topology record, lumps and
+            // shells included (their next pointer follows it).
             match base_entity_type(&record.entity_type) {
-                "lump" => Some(1),
-                "shell" => Some(2),
-                "body" | "subshell" | "wire" | "face" | "loop" | "vertex" | "coedge" | "edge"
-                | "point" | "transform" | "surface" | "curve" | "pcurve" => Some(0),
+                "body" | "lump" | "shell" | "subshell" | "wire" | "face" | "loop" | "vertex"
+                | "coedge" | "edge" | "point" | "transform" | "surface" | "curve" | "pcurve" => {
+                    Some(0)
+                }
                 _ => None,
             }
         } else {
